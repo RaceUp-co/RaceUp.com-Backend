@@ -1,0 +1,14 @@
+name = "raceup-backend-api"
+main = "src/index.ts"
+compatibility_date = "2025-12-01"
+compatibility_flags = ["nodejs_compat"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "raceup-db"
+database_id = "TO_REPLACE_AFTER_D1_CREATE"
+
+[vars]
+ENVIRONMENT = "production"
+ACCESS_TOKEN_EXPIRY = "900"
+REFRESH_TOKEN_EXPIRY = "604800"
