@@ -12,6 +12,7 @@ export type Variables = {
   jwtPayload: {
     sub: string;
     email: string;
+    username: string;
     iat: number;
     exp: number;
   };
@@ -26,6 +27,11 @@ export type User = {
   id: string;
   email: string;
   password_hash: string;
+  username: string;
+  first_name: string;
+  last_name: string;
+  birth_date: string | null;
+  role: string;
   created_at: string;
   updated_at: string;
 };

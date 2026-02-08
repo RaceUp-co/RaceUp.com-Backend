@@ -14,10 +14,13 @@ app.use(
         'https://race-up.net',
         'https://www.race-up.net',
       ];
-      // En dev, autoriser localhost
-      if (origin && (allowed.includes(origin) || origin.startsWith('http://localhost'))) {
-        return origin;
-      }
+      if (!origin) return null;
+      // Domaines autorisés
+      if (allowed.includes(origin)) return origin;
+      // Cloudflare Pages (preview + production)
+      if (origin.endsWith('.pages.dev')) return origin;
+      // Dev local
+      if (origin.startsWith('http://localhost')) return origin;
       return null;
     },
     allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
