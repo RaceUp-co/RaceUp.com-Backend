@@ -1,21 +1,38 @@
 import type { User, RefreshToken } from '../types';
 
+const USER_COLUMNS = 'id, email, password_hash, username, first_name, last_name, birth_date, role, created_at, updated_at';
+
 export async function createUser(
   db: D1Database,
   email: string,
-  passwordHash: string
+  passwordHash: string,
+  username: string,
+  firstName: string,
+  lastName: string,
+  birthDate?: string
 ): Promise<User> {
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
 
   await db
     .prepare(
-      'INSERT INTO users (id, email, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?)'
+      'INSERT INTO users (id, email, password_hash, username, first_name, last_name, birth_date, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
     )
-    .bind(id, email, passwordHash, now, now)
+    .bind(id, email, passwordHash, username, firstName, lastName, birthDate ?? null, now, now)
     .run();
 
-  return { id, email, password_hash: passwordHash, created_at: now, updated_at: now };
+  return {
+    id,
+    email,
+    password_hash: passwordHash,
+    username,
+    first_name: firstName,
+    last_name: lastName,
+    birth_date: birthDate ?? null,
+    role: 'user',
+    created_at: now,
+    updated_at: now,
+  };
 }
 
 export async function getUserByEmail(
@@ -23,7 +40,7 @@ export async function getUserByEmail(
   email: string
 ): Promise<User | null> {
   const result = await db
-    .prepare('SELECT id, email, password_hash, created_at, updated_at FROM users WHERE email = ?')
+    .prepare(`SELECT ${USER_COLUMNS} FROM users WHERE email = ?`)
     .bind(email)
     .first<User>();
 
@@ -35,8 +52,20 @@ export async function getUserById(
   id: string
 ): Promise<User | null> {
   const result = await db
-    .prepare('SELECT id, email, password_hash, created_at, updated_at FROM users WHERE id = ?')
+    .prepare(`SELECT ${USER_COLUMNS} FROM users WHERE id = ?`)
     .bind(id)
+    .first<User>();
+
+  return result ?? null;
+}
+
+export async function getUserByUsername(
+  db: D1Database,
+  username: string
+): Promise<User | null> {
+  const result = await db
+    .prepare(`SELECT ${USER_COLUMNS} FROM users WHERE username = ?`)
+    .bind(username)
     .first<User>();
 
   return result ?? null;

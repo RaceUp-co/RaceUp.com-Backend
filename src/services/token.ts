@@ -1,15 +1,25 @@
 import { sign, verify } from 'hono/jwt';
 
+export type JwtPayload = {
+  sub: string;
+  email: string;
+  username: string;
+  iat: number;
+  exp: number;
+};
+
 export async function generateAccessToken(
   userId: string,
   email: string,
+  username: string,
   secret: string,
   expirySeconds: number
 ): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
-  const payload = {
+  const payload: JwtPayload = {
     sub: userId,
     email,
+    username,
     iat: now,
     exp: now + expirySeconds,
   };
@@ -19,9 +29,9 @@ export async function generateAccessToken(
 export async function verifyAccessToken(
   token: string,
   secret: string
-): Promise<{ sub: string; email: string; iat: number; exp: number }> {
+): Promise<JwtPayload> {
   const payload = await verify(token, secret, 'HS256');
-  return payload as { sub: string; email: string; iat: number; exp: number };
+  return payload as JwtPayload;
 }
 
 export function generateRefreshToken(): string {
