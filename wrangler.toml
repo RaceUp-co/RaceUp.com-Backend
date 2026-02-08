@@ -5,8 +5,8 @@ compatibility_flags = ["nodejs_compat"]
 
 [[d1_databases]]
 binding = "DB"
-database_name = "raceup-db"
-database_id = "TO_REPLACE_AFTER_D1_CREATE"
+database_name = "RaceUp-User-Data"
+database_id = "da5708b9-9979-44f1-a979-5a822bad00c1"
 
 [vars]
 ENVIRONMENT = "production"
