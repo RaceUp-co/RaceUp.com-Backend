@@ -17,6 +17,7 @@ import {
   createUser,
   getUserByEmail,
   getUserById,
+  getUserByUsername,
   deleteUser,
   saveRefreshToken,
   getRefreshToken,
@@ -30,10 +31,10 @@ const auth = new Hono<AppType>();
 
 // POST /register
 auth.post('/register', zValidator('json', registerSchema), async (c) => {
-  const { email, password } = c.req.valid('json');
+  const { email, password, username, first_name, last_name, birth_date } = c.req.valid('json');
 
-  const existingUser = await getUserByEmail(c.env.DB, email);
-  if (existingUser) {
+  const existingEmail = await getUserByEmail(c.env.DB, email);
+  if (existingEmail) {
     return c.json(
       {
         success: false,
@@ -46,8 +47,30 @@ auth.post('/register', zValidator('json', registerSchema), async (c) => {
     );
   }
 
+  const existingUsername = await getUserByUsername(c.env.DB, username);
+  if (existingUsername) {
+    return c.json(
+      {
+        success: false,
+        error: {
+          code: 'USERNAME_ALREADY_EXISTS',
+          message: 'Ce nom d\'utilisateur est déjà pris.',
+        },
+      },
+      409
+    );
+  }
+
   const passwordHash = await hashPassword(password);
-  const user = await createUser(c.env.DB, email, passwordHash);
+  const user = await createUser(
+    c.env.DB,
+    email,
+    passwordHash,
+    username,
+    first_name,
+    last_name,
+    birth_date
+  );
 
   const accessTokenExpiry = parseInt(c.env.ACCESS_TOKEN_EXPIRY, 10);
   const refreshTokenExpiry = parseInt(c.env.REFRESH_TOKEN_EXPIRY, 10);
@@ -55,6 +78,7 @@ auth.post('/register', zValidator('json', registerSchema), async (c) => {
   const accessToken = await generateAccessToken(
     user.id,
     user.email,
+    user.username,
     c.env.JWT_SECRET,
     accessTokenExpiry
   );
@@ -74,6 +98,10 @@ auth.post('/register', zValidator('json', registerSchema), async (c) => {
         user: {
           id: user.id,
           email: user.email,
+          username: user.username,
+          first_name: user.first_name,
+          last_name: user.last_name,
+          role: user.role,
           created_at: user.created_at,
         },
         access_token: accessToken,
@@ -124,6 +152,7 @@ auth.post('/login', zValidator('json', loginSchema), async (c) => {
   const accessToken = await generateAccessToken(
     user.id,
     user.email,
+    user.username,
     c.env.JWT_SECRET,
     accessTokenExpiry
   );
@@ -142,9 +171,48 @@ auth.post('/login', zValidator('json', loginSchema), async (c) => {
       user: {
         id: user.id,
         email: user.email,
+        username: user.username,
+        first_name: user.first_name,
+        last_name: user.last_name,
+        role: user.role,
       },
       access_token: accessToken,
       refresh_token: refreshToken,
+    },
+  });
+});
+
+// GET /me (protégé)
+auth.get('/me', authMiddleware, async (c) => {
+  const payload = c.get('jwtPayload');
+
+  const user = await getUserById(c.env.DB, payload.sub);
+  if (!user) {
+    return c.json(
+      {
+        success: false,
+        error: {
+          code: 'USER_NOT_FOUND',
+          message: 'Utilisateur introuvable.',
+        },
+      },
+      404
+    );
+  }
+
+  return c.json({
+    success: true,
+    data: {
+      user: {
+        id: user.id,
+        email: user.email,
+        username: user.username,
+        first_name: user.first_name,
+        last_name: user.last_name,
+        birth_date: user.birth_date,
+        role: user.role,
+        created_at: user.created_at,
+      },
     },
   });
 });
@@ -169,7 +237,6 @@ auth.post('/refresh', zValidator('json', refreshSchema), async (c) => {
     );
   }
 
-  // Supprimer l'ancien token (rotation)
   await deleteRefreshToken(c.env.DB, tokenHash);
 
   const user = await getUserById(c.env.DB, storedToken.user_id);
@@ -192,6 +259,7 @@ auth.post('/refresh', zValidator('json', refreshSchema), async (c) => {
   const newAccessToken = await generateAccessToken(
     user.id,
     user.email,
+    user.username,
     c.env.JWT_SECRET,
     accessTokenExpiry
   );
@@ -207,6 +275,14 @@ auth.post('/refresh', zValidator('json', refreshSchema), async (c) => {
   return c.json({
     success: true,
     data: {
+      user: {
+        id: user.id,
+        email: user.email,
+        username: user.username,
+        first_name: user.first_name,
+        last_name: user.last_name,
+        role: user.role,
+      },
       access_token: newAccessToken,
       refresh_token: newRefreshToken,
     },
