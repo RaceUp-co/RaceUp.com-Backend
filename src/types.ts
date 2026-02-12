@@ -18,6 +18,7 @@ export type Variables = {
     iat: number;
     exp: number;
   };
+  currentUser: User;
 };
 
 export type AppType = {
