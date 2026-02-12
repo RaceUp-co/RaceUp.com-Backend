@@ -1,6 +1,6 @@
 import type { User, RefreshToken } from '../types';
 
-const USER_COLUMNS = 'id, email, password_hash, username, first_name, last_name, birth_date, role, created_at, updated_at';
+const USER_COLUMNS = 'id, email, password_hash, username, first_name, last_name, birth_date, auth_provider, role, created_at, updated_at';
 
 export async function createUser(
   db: D1Database,
@@ -29,10 +29,77 @@ export async function createUser(
     first_name: firstName,
     last_name: lastName,
     birth_date: birthDate ?? null,
+    auth_provider: 'email',
     role: 'user',
     created_at: now,
     updated_at: now,
   };
+}
+
+// Crée un utilisateur OAuth (sans mot de passe)
+export async function createOAuthUser(
+  db: D1Database,
+  email: string,
+  username: string,
+  firstName: string,
+  lastName: string,
+  authProvider: string
+): Promise<User> {
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+
+  await db
+    .prepare(
+      'INSERT INTO users (id, email, password_hash, username, first_name, last_name, auth_provider, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    )
+    .bind(id, email, '', username, firstName, lastName, authProvider, now, now)
+    .run();
+
+  return {
+    id,
+    email,
+    password_hash: '',
+    username,
+    first_name: firstName,
+    last_name: lastName,
+    birth_date: null,
+    auth_provider: authProvider,
+    role: 'user',
+    created_at: now,
+    updated_at: now,
+  };
+}
+
+// Trouve un utilisateur par email ou le crée via OAuth
+export async function findOrCreateOAuthUser(
+  db: D1Database,
+  email: string,
+  firstName: string,
+  lastName: string,
+  authProvider: string
+): Promise<User> {
+  const existing = await getUserByEmail(db, email);
+  if (existing) return existing;
+
+  // Génère un username unique à partir de l'email
+  const emailPrefix = email
+    .split('@')[0]
+    .replace(/[^a-zA-Z0-9_-]/g, '_')
+    .slice(0, 20);
+  const randomSuffix = Array.from(crypto.getRandomValues(new Uint8Array(2)))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+  let username = `${emailPrefix}_${randomSuffix}`;
+
+  // Vérifie l'unicité (très improbable mais par sécurité)
+  while (await getUserByUsername(db, username)) {
+    const newSuffix = Array.from(crypto.getRandomValues(new Uint8Array(2)))
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
+    username = `${emailPrefix}_${newSuffix}`;
+  }
+
+  return createOAuthUser(db, email, username, firstName, lastName, authProvider);
 }
 
 export async function getUserByEmail(

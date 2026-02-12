@@ -6,6 +6,8 @@ export type Bindings = {
   ENVIRONMENT: string;
   ACCESS_TOKEN_EXPIRY: string;
   REFRESH_TOKEN_EXPIRY: string;
+  GOOGLE_CLIENT_ID: string;
+  APPLE_CLIENT_ID: string;
 };
 
 export type Variables = {
@@ -31,6 +33,7 @@ export type User = {
   first_name: string;
   last_name: string;
   birth_date: string | null;
+  auth_provider: string;
   role: string;
   created_at: string;
   updated_at: string;

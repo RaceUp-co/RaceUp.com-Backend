@@ -47,3 +47,13 @@ export const deleteAccountSchema = z.object({
     .string()
     .min(1, 'Le mot de passe est requis pour confirmer la suppression.'),
 });
+
+export const googleAuthSchema = z.object({
+  access_token: z.string().min(1, 'Le token Google est requis.'),
+});
+
+export const appleAuthSchema = z.object({
+  id_token: z.string().min(1, "Le token Apple est requis."),
+  first_name: z.string().optional(),
+  last_name: z.string().optional(),
+});

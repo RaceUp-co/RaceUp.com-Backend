@@ -6,6 +6,8 @@ import {
   loginSchema,
   refreshSchema,
   deleteAccountSchema,
+  googleAuthSchema,
+  appleAuthSchema,
 } from '../validators/auth';
 import { hashPassword, verifyPassword } from '../services/password';
 import {
@@ -24,10 +26,39 @@ import {
   deleteRefreshToken,
   deleteUserRefreshTokens,
   cleanExpiredTokens,
+  findOrCreateOAuthUser,
 } from '../services/user';
+import { verifyGoogleToken, verifyAppleToken } from '../services/oauth';
 import { authMiddleware } from '../middleware/auth';
 
 const auth = new Hono<AppType>();
+
+// Génère les tokens JWT et refresh pour un utilisateur (réutilisé par plusieurs routes)
+async function generateTokensForUser(
+  user: { id: string; email: string; username: string },
+  env: { JWT_SECRET: string; ACCESS_TOKEN_EXPIRY: string; REFRESH_TOKEN_EXPIRY: string; DB: D1Database }
+) {
+  const accessTokenExpiry = parseInt(env.ACCESS_TOKEN_EXPIRY, 10);
+  const refreshTokenExpiry = parseInt(env.REFRESH_TOKEN_EXPIRY, 10);
+
+  const accessToken = await generateAccessToken(
+    user.id,
+    user.email,
+    user.username,
+    env.JWT_SECRET,
+    accessTokenExpiry
+  );
+
+  const refreshToken = generateRefreshToken();
+  const refreshTokenHash = await hashRefreshToken(refreshToken);
+  const expiresAt = new Date(
+    Date.now() + refreshTokenExpiry * 1000
+  ).toISOString();
+
+  await saveRefreshToken(env.DB, user.id, refreshTokenHash, expiresAt);
+
+  return { accessToken, refreshToken };
+}
 
 // POST /register
 auth.post('/register', zValidator('json', registerSchema), async (c) => {
@@ -72,24 +103,7 @@ auth.post('/register', zValidator('json', registerSchema), async (c) => {
     birth_date
   );
 
-  const accessTokenExpiry = parseInt(c.env.ACCESS_TOKEN_EXPIRY, 10);
-  const refreshTokenExpiry = parseInt(c.env.REFRESH_TOKEN_EXPIRY, 10);
-
-  const accessToken = await generateAccessToken(
-    user.id,
-    user.email,
-    user.username,
-    c.env.JWT_SECRET,
-    accessTokenExpiry
-  );
-
-  const refreshToken = generateRefreshToken();
-  const refreshTokenHash = await hashRefreshToken(refreshToken);
-  const expiresAt = new Date(
-    Date.now() + refreshTokenExpiry * 1000
-  ).toISOString();
-
-  await saveRefreshToken(c.env.DB, user.id, refreshTokenHash, expiresAt);
+  const { accessToken, refreshToken } = await generateTokensForUser(user, c.env);
 
   return c.json(
     {
@@ -130,6 +144,20 @@ auth.post('/login', zValidator('json', loginSchema), async (c) => {
     );
   }
 
+  // Compte OAuth sans mot de passe
+  if (!user.password_hash) {
+    return c.json(
+      {
+        success: false,
+        error: {
+          code: 'OAUTH_ACCOUNT',
+          message: `Ce compte utilise la connexion ${user.auth_provider === 'google' ? 'Google' : user.auth_provider === 'apple' ? 'Apple' : 'sociale'}. Utilisez le bouton correspondant pour vous connecter.`,
+        },
+      },
+      400
+    );
+  }
+
   const isValid = await verifyPassword(password, user.password_hash);
   if (!isValid) {
     return c.json(
@@ -146,24 +174,98 @@ auth.post('/login', zValidator('json', loginSchema), async (c) => {
 
   await cleanExpiredTokens(c.env.DB, user.id);
 
-  const accessTokenExpiry = parseInt(c.env.ACCESS_TOKEN_EXPIRY, 10);
-  const refreshTokenExpiry = parseInt(c.env.REFRESH_TOKEN_EXPIRY, 10);
+  const { accessToken, refreshToken } = await generateTokensForUser(user, c.env);
 
-  const accessToken = await generateAccessToken(
-    user.id,
-    user.email,
-    user.username,
-    c.env.JWT_SECRET,
-    accessTokenExpiry
+  return c.json({
+    success: true,
+    data: {
+      user: {
+        id: user.id,
+        email: user.email,
+        username: user.username,
+        first_name: user.first_name,
+        last_name: user.last_name,
+        role: user.role,
+      },
+      access_token: accessToken,
+      refresh_token: refreshToken,
+    },
+  });
+});
+
+// POST /google - Connexion/inscription via Google
+auth.post('/google', zValidator('json', googleAuthSchema), async (c) => {
+  const { access_token } = c.req.valid('json');
+
+  const googleUser = await verifyGoogleToken(access_token);
+  if (!googleUser) {
+    return c.json(
+      {
+        success: false,
+        error: {
+          code: 'GOOGLE_AUTH_FAILED',
+          message: 'Échec de la vérification Google. Veuillez réessayer.',
+        },
+      },
+      401
+    );
+  }
+
+  const user = await findOrCreateOAuthUser(
+    c.env.DB,
+    googleUser.email,
+    googleUser.given_name || '',
+    googleUser.family_name || '',
+    'google'
   );
 
-  const refreshToken = generateRefreshToken();
-  const refreshTokenHash = await hashRefreshToken(refreshToken);
-  const expiresAt = new Date(
-    Date.now() + refreshTokenExpiry * 1000
-  ).toISOString();
+  const { accessToken, refreshToken } = await generateTokensForUser(user, c.env);
 
-  await saveRefreshToken(c.env.DB, user.id, refreshTokenHash, expiresAt);
+  return c.json({
+    success: true,
+    data: {
+      user: {
+        id: user.id,
+        email: user.email,
+        username: user.username,
+        first_name: user.first_name,
+        last_name: user.last_name,
+        role: user.role,
+      },
+      access_token: accessToken,
+      refresh_token: refreshToken,
+    },
+  });
+});
+
+// POST /apple - Connexion/inscription via Apple
+auth.post('/apple', zValidator('json', appleAuthSchema), async (c) => {
+  const { id_token, first_name, last_name } = c.req.valid('json');
+
+  const applePayload = await verifyAppleToken(id_token, c.env.APPLE_CLIENT_ID);
+  if (!applePayload) {
+    return c.json(
+      {
+        success: false,
+        error: {
+          code: 'APPLE_AUTH_FAILED',
+          message: 'Échec de la vérification Apple. Veuillez réessayer.',
+        },
+      },
+      401
+    );
+  }
+
+  // Apple ne renvoie le nom que lors de la première connexion
+  const user = await findOrCreateOAuthUser(
+    c.env.DB,
+    applePayload.email,
+    first_name || '',
+    last_name || '',
+    'apple'
+  );
+
+  const { accessToken, refreshToken } = await generateTokensForUser(user, c.env);
 
   return c.json({
     success: true,
@@ -253,24 +355,7 @@ auth.post('/refresh', zValidator('json', refreshSchema), async (c) => {
     );
   }
 
-  const accessTokenExpiry = parseInt(c.env.ACCESS_TOKEN_EXPIRY, 10);
-  const refreshTokenExpiry = parseInt(c.env.REFRESH_TOKEN_EXPIRY, 10);
-
-  const newAccessToken = await generateAccessToken(
-    user.id,
-    user.email,
-    user.username,
-    c.env.JWT_SECRET,
-    accessTokenExpiry
-  );
-
-  const newRefreshToken = generateRefreshToken();
-  const newRefreshTokenHash = await hashRefreshToken(newRefreshToken);
-  const expiresAt = new Date(
-    Date.now() + refreshTokenExpiry * 1000
-  ).toISOString();
-
-  await saveRefreshToken(c.env.DB, user.id, newRefreshTokenHash, expiresAt);
+  const { accessToken, refreshToken } = await generateTokensForUser(user, c.env);
 
   return c.json({
     success: true,
@@ -283,8 +368,8 @@ auth.post('/refresh', zValidator('json', refreshSchema), async (c) => {
         last_name: user.last_name,
         role: user.role,
       },
-      access_token: newAccessToken,
-      refresh_token: newRefreshToken,
+      access_token: accessToken,
+      refresh_token: refreshToken,
     },
   });
 });
@@ -325,18 +410,21 @@ auth.delete(
       );
     }
 
-    const isValid = await verifyPassword(password, user.password_hash);
-    if (!isValid) {
-      return c.json(
-        {
-          success: false,
-          error: {
-            code: 'INVALID_PASSWORD',
-            message: 'Mot de passe incorrect.',
+    // Les comptes OAuth n'ont pas de mot de passe - vérification via token suffisante
+    if (user.password_hash) {
+      const isValid = await verifyPassword(password, user.password_hash);
+      if (!isValid) {
+        return c.json(
+          {
+            success: false,
+            error: {
+              code: 'INVALID_PASSWORD',
+              message: 'Mot de passe incorrect.',
+            },
           },
-        },
-        401
-      );
+          401
+        );
+      }
     }
 
     await deleteUser(c.env.DB, user.id);
