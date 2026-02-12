@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import type { AppType } from '../types';
 import { authMiddleware } from '../middleware/auth';
-import { adminMiddleware } from '../middleware/admin';
+import { adminMiddleware, superAdminMiddleware } from '../middleware/admin';
 import {
   createProjectSchema,
   updateUserRoleSchema,
@@ -117,9 +117,11 @@ admin.get('/users', async (c) => {
   });
 });
 
-// PATCH /users/:id/role — Changer le rôle
+// PATCH /users/:id/role — Changer le rôle (super_admin uniquement)
 admin.patch(
   '/users/:id/role',
+  authMiddleware,
+  superAdminMiddleware,
   zValidator('json', updateUserRoleSchema),
   async (c) => {
     const userId = c.req.param('id');
@@ -136,6 +138,20 @@ admin.patch(
           },
         },
         404
+      );
+    }
+
+    // Impossible de modifier le rôle d'un super_admin
+    if (user.role === 'super_admin') {
+      return c.json(
+        {
+          success: false,
+          error: {
+            code: 'FORBIDDEN',
+            message: 'Impossible de modifier le rôle d\'un super-administrateur.',
+          },
+        },
+        403
       );
     }
 
