@@ -14,7 +14,7 @@ export const createProjectSchema = z.object({
 });
 
 export const updateUserRoleSchema = z.object({
-  role: z.enum(['user', 'admin']),
+  role: z.enum(['user', 'admin', 'super_admin']),
 });
 
 export const pageViewSchema = z.object({
