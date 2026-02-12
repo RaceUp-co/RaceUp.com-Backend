@@ -2,6 +2,8 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import type { AppType } from './types';
 import authRoutes from './routes/auth';
+import adminRoutes from './routes/admin';
+import trackingRoutes from './routes/tracking';
 
 const app = new Hono<AppType>();
 
@@ -11,6 +13,8 @@ app.use(
   cors({
     origin: (origin) => {
       const allowed = [
+        'https://raceup.com',
+        'https://www.raceup.com',
         'https://race-up.net',
         'https://www.race-up.net',
       ];
@@ -37,6 +41,12 @@ app.get('/api/health', (c) =>
 
 // Routes d'authentification
 app.route('/api/auth', authRoutes);
+
+// Routes admin (protégées par auth + admin middleware)
+app.route('/api/admin', adminRoutes);
+
+// Routes tracking (publiques)
+app.route('/api/track', trackingRoutes);
 
 // Gestion d'erreur globale
 app.onError((err, c) => {

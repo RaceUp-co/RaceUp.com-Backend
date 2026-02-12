@@ -46,3 +46,28 @@ export type RefreshToken = {
   expires_at: string;
   created_at: string;
 };
+
+export type Project = {
+  id: string;
+  user_id: string;
+  name: string;
+  description: string;
+  status: 'in_progress' | 'completed' | 'paused';
+  service_type: string;
+  start_date: string;
+  end_date: string | null;
+  progress: number;
+  last_update: string | null;
+  deliverables_url: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type PageView = {
+  id: number;
+  path: string;
+  referrer: string | null;
+  user_agent: string | null;
+  country: string | null;
+  created_at: string;
+};
