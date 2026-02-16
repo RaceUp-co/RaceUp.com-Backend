@@ -20,8 +20,9 @@ const admin = new Hono<AppType>();
 // Tous les endpoints admin sont protégés
 admin.use('*', authMiddleware, adminMiddleware);
 
-// GET /stats — Statistiques globales (cartes)
-admin.get('/stats', async (c) => {
+// GET /dashboard/overview — Statistiques globales (cartes)
+// Note: Endpoints renommés pour éviter les blocages par les adblockers
+admin.get('/dashboard/overview', async (c) => {
   const stats = await getAdminStats(c.env.DB);
 
   return c.json({
@@ -30,8 +31,8 @@ admin.get('/stats', async (c) => {
   });
 });
 
-// GET /stats/registrations?days=30 — Inscriptions par jour
-admin.get('/stats/registrations', async (c) => {
+// GET /dashboard/signups?days=30 — Inscriptions par jour
+admin.get('/dashboard/signups', async (c) => {
   const days = parseInt(c.req.query('days') ?? '30', 10);
   const data = await getRegistrationStats(c.env.DB, days);
 
@@ -41,8 +42,8 @@ admin.get('/stats/registrations', async (c) => {
   });
 });
 
-// GET /stats/pageviews?days=30 — Pages vues par jour
-admin.get('/stats/pageviews', async (c) => {
+// GET /dashboard/visits?days=30 — Pages vues par jour
+admin.get('/dashboard/visits', async (c) => {
   const days = parseInt(c.req.query('days') ?? '30', 10);
   const data = await getPageViewStats(c.env.DB, days);
 
