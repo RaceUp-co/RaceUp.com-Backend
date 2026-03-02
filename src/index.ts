@@ -4,6 +4,7 @@ import type { AppType } from './types';
 import authRoutes from './routes/auth';
 import adminRoutes from './routes/admin';
 import trackingRoutes from './routes/tracking';
+import consentRoutes from './routes/consent';
 
 const app = new Hono<AppType>();
 
@@ -47,6 +48,9 @@ app.route('/api/admin', adminRoutes);
 
 // Routes tracking (publiques)
 app.route('/api/track', trackingRoutes);
+
+// Routes de consentement cookies (RGPD)
+app.route('/api/consent', consentRoutes);
 
 // Gestion d'erreur globale
 app.onError((err, c) => {

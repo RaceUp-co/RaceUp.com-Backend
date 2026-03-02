@@ -2,6 +2,7 @@ import type { Hono } from 'hono';
 
 export type Bindings = {
   DB: D1Database;
+  KV_CONSENT: KVNamespace; // KV pour stocker les consentements cookies (RGPD)
   JWT_SECRET: string;
   ENVIRONMENT: string;
   ACCESS_TOKEN_EXPIRY: string;
@@ -19,6 +20,7 @@ export type Variables = {
     exp: number;
   };
   currentUser: User;
+  cookieUserId: string; // ID utilisateur récupéré via le cookie de session
 };
 
 export type AppType = {
