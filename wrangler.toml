@@ -8,6 +8,11 @@ binding = "DB"
 database_name = "RaceUp-User-Data"
 database_id = "da5708b9-9979-44f1-a979-5a822bad00c1"
 
+# KV pour stocker les consentements cookies (conformité RGPD - 3 ans de rétention)
+[[kv_namespaces]]
+binding = "KV_CONSENT"
+id = ""  # À remplir après création via: wrangler kv namespace create "consent_store"
+
 [vars]
 ENVIRONMENT = "production"
 ACCESS_TOKEN_EXPIRY = "900"
