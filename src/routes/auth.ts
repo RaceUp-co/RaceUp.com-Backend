@@ -30,6 +30,7 @@ import {
 } from '../services/user';
 import { verifyGoogleToken, verifyAppleToken } from '../services/oauth';
 import { authMiddleware } from '../middleware/auth';
+import { setSessionCookie, getSessionCookie, clearSessionCookie } from '../services/cookies';
 
 const auth = new Hono<AppType>();
 
@@ -105,6 +106,9 @@ auth.post('/register', zValidator('json', registerSchema), async (c) => {
 
   const { accessToken, refreshToken } = await generateTokensForUser(user, c.env);
 
+  // Cookie HttpOnly pour persistance de session
+  setSessionCookie(c, refreshToken, c.env);
+
   return c.json(
     {
       success: true,
@@ -176,6 +180,9 @@ auth.post('/login', zValidator('json', loginSchema), async (c) => {
 
   const { accessToken, refreshToken } = await generateTokensForUser(user, c.env);
 
+  // Cookie HttpOnly pour persistance de session
+  setSessionCookie(c, refreshToken, c.env);
+
   return c.json({
     success: true,
     data: {
@@ -220,6 +227,9 @@ auth.post('/google', zValidator('json', googleAuthSchema), async (c) => {
   );
 
   const { accessToken, refreshToken } = await generateTokensForUser(user, c.env);
+
+  // Cookie HttpOnly pour persistance de session
+  setSessionCookie(c, refreshToken, c.env);
 
   return c.json({
     success: true,
@@ -266,6 +276,9 @@ auth.post('/apple', zValidator('json', appleAuthSchema), async (c) => {
   );
 
   const { accessToken, refreshToken } = await generateTokensForUser(user, c.env);
+
+  // Cookie HttpOnly pour persistance de session
+  setSessionCookie(c, refreshToken, c.env);
 
   return c.json({
     success: true,
@@ -357,6 +370,82 @@ auth.post('/refresh', zValidator('json', refreshSchema), async (c) => {
 
   const { accessToken, refreshToken } = await generateTokensForUser(user, c.env);
 
+  // Cookie HttpOnly pour persistance de session
+  setSessionCookie(c, refreshToken, c.env);
+
+  return c.json({
+    success: true,
+    data: {
+      user: {
+        id: user.id,
+        email: user.email,
+        username: user.username,
+        first_name: user.first_name,
+        last_name: user.last_name,
+        role: user.role,
+      },
+      access_token: accessToken,
+      refresh_token: refreshToken,
+    },
+  });
+});
+
+// POST /refresh-session - Rafraîchit la session depuis le cookie (pour persistance)
+auth.post('/refresh-session', async (c) => {
+  const sessionToken = getSessionCookie(c);
+
+  if (!sessionToken) {
+    return c.json(
+      {
+        success: false,
+        error: {
+          code: 'NO_SESSION',
+          message: 'Aucune session active.',
+        },
+      },
+      401
+    );
+  }
+
+  const tokenHash = await hashRefreshToken(sessionToken);
+  const storedToken = await getRefreshToken(c.env.DB, tokenHash);
+
+  if (!storedToken) {
+    clearSessionCookie(c, c.env);
+    return c.json(
+      {
+        success: false,
+        error: {
+          code: 'INVALID_SESSION',
+          message: 'Session invalide ou expirée.',
+        },
+      },
+      401
+    );
+  }
+
+  await deleteRefreshToken(c.env.DB, tokenHash);
+
+  const user = await getUserById(c.env.DB, storedToken.user_id);
+  if (!user) {
+    clearSessionCookie(c, c.env);
+    return c.json(
+      {
+        success: false,
+        error: {
+          code: 'USER_NOT_FOUND',
+          message: 'Utilisateur introuvable.',
+        },
+      },
+      401
+    );
+  }
+
+  const { accessToken, refreshToken } = await generateTokensForUser(user, c.env);
+
+  // Renouvelle le cookie de session
+  setSessionCookie(c, refreshToken, c.env);
+
   return c.json({
     success: true,
     data: {
@@ -378,6 +467,9 @@ auth.post('/refresh', zValidator('json', refreshSchema), async (c) => {
 auth.post('/logout', authMiddleware, async (c) => {
   const payload = c.get('jwtPayload');
   await deleteUserRefreshTokens(c.env.DB, payload.sub);
+
+  // Supprime le cookie de session
+  clearSessionCookie(c, c.env);
 
   return c.json({
     success: true,
