@@ -8,15 +8,19 @@ binding = "DB"
 database_name = "RaceUp-User-Data"
 database_id = "da5708b9-9979-44f1-a979-5a822bad00c1"
 
+[[r2_buckets]]
+binding = "R2"
+bucket_name = "raceup-project-files"
+
 [vars]
 ENVIRONMENT = "production"
 ACCESS_TOKEN_EXPIRY = "900"
 REFRESH_TOKEN_EXPIRY = "604800"
 GOOGLE_CLIENT_ID = ""
+APPLE_CLIENT_ID = ""
 
 # Observabilité Cloudflare
 [observability]
 [observability.logs]
 enabled = false
 invocation_logs = true
-APPLE_CLIENT_ID = ""
