@@ -2,6 +2,7 @@ import type { Hono } from 'hono';
 
 export type Bindings = {
   DB: D1Database;
+  R2: R2Bucket;
   JWT_SECRET: string;
   ENVIRONMENT: string;
   ACCESS_TOKEN_EXPIRY: string;
@@ -55,13 +56,46 @@ export type Project = {
   description: string;
   status: 'in_progress' | 'completed' | 'paused';
   service_type: string;
+  tier: string | null;
   start_date: string;
   end_date: string | null;
   progress: number;
   last_update: string | null;
   deliverables_url: string | null;
+  is_archived: number;
+  created_by: string;
   created_at: string;
   updated_at: string;
+};
+
+export type Ticket = {
+  id: string;
+  project_id: string;
+  subject: string;
+  status: 'open' | 'resolved';
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TicketMessage = {
+  id: string;
+  ticket_id: string;
+  author_id: string;
+  content: string;
+  created_at: string;
+};
+
+export type ProjectFileRecord = {
+  id: string;
+  project_id: string;
+  uploaded_by: string;
+  filename: string;
+  original_filename: string;
+  file_size: number;
+  mime_type: string;
+  r2_key: string;
+  created_at: string;
 };
 
 export type PageView = {

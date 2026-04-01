@@ -3,6 +3,7 @@ import { cors } from 'hono/cors';
 import type { AppType } from './types';
 import authRoutes from './routes/auth';
 import adminRoutes from './routes/admin';
+import projectRoutes from './routes/projects';
 import trackingRoutes from './routes/tracking';
 
 const app = new Hono<AppType>();
@@ -44,6 +45,9 @@ app.route('/api/auth', authRoutes);
 
 // Routes admin (protégées par auth + admin middleware)
 app.route('/api/admin', adminRoutes);
+
+// Routes projets (protégées par auth)
+app.route('/api/projects', projectRoutes);
 
 // Routes tracking (publiques)
 app.route('/api/track', trackingRoutes);
