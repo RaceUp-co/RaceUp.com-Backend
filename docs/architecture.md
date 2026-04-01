@@ -2,10 +2,10 @@
 
 ## Vue d'ensemble
 
-API REST d'authentification pour le site race-up.net, deployee sur Cloudflare Workers avec une base de donnees Cloudflare D1.
+API REST pour le site raceup.com, deployee sur Cloudflare Workers avec Cloudflare D1 (base de donnees) et R2 (stockage fichiers).
 
 ```
-Client (race-up.net)
+Client (raceup.com)
        |
        | HTTPS
        v
@@ -20,12 +20,19 @@ Client (race-up.net)
 │  │     Middleware JWT  │  │
 │  │          │         │  │
 │  │     Services       │  │
-│  │   (password,token) │  │
+│  │   (password,token, │  │
+│  │    project,ticket, │  │
+│  │    file,analytics) │  │
 │  └─────────┬──────────┘  │
 │            │              │
 │  ┌─────────▼──────────┐  │
 │  │   Cloudflare D1    │  │
 │  │   (SQLite)         │  │
+│  └────────────────────┘  │
+│            │              │
+│  ┌─────────▼──────────┐  │
+│  │   Cloudflare R2    │  │
+│  │   (Object Storage) │  │
 │  └────────────────────┘  │
 └──────────────────────────┘
 ```
@@ -37,6 +44,7 @@ Client (race-up.net)
 | Runtime | Cloudflare Workers (free tier) | Edge computing, 0ms cold start |
 | Framework | Hono v4 | Ultra-leger (~14kB), natif Workers |
 | BDD | Cloudflare D1 | SQLite manage, gratuit, co-localise |
+| Stockage | Cloudflare R2 | S3-compatible, 0 frais d'egress |
 | Hachage MDP | PBKDF2-SHA-256 (Web Crypto) | Natif, zero dependance externe |
 | JWT | hono/jwt (HS256) | Inclus dans Hono |
 | Validation | Zod + @hono/zod-validator | Typage automatique, messages clairs |
@@ -48,20 +56,33 @@ Client (race-up.net)
 ```
 src/
 ├── index.ts                 Point d'entree, CORS, error handlers, montage routes
-├── types.ts                 Types TS : Bindings, Variables, AppType, User, RefreshToken
+├── types.ts                 Types TS : Bindings, Variables, AppType, User, Project, Ticket, etc.
 ├── routes/
-│   └── auth.ts              5 endpoints : register, login, refresh, logout, delete
+│   ├── auth.ts              Endpoints auth : register, login, refresh, logout, delete, me
+│   ├── admin.ts             Endpoints admin : dashboard, users, projects (admin only)
+│   ├── projects.ts          Endpoints projets : CRUD projets, tickets, fichiers (user auth)
+│   └── tracking.ts          Endpoints tracking : page views (public)
 ├── middleware/
-│   └── auth.ts              Verification Bearer JWT, injection du payload dans le contexte
+│   ├── auth.ts              Verification Bearer JWT, injection du payload dans le contexte
+│   └── admin.ts             Verification role admin/super_admin
 ├── services/
 │   ├── password.ts          hashPassword / verifyPassword (PBKDF2, comparaison timing-safe)
 │   ├── token.ts             Generation JWT access + refresh token opaque + hash SHA-256
-│   └── user.ts              CRUD D1 : users + refresh_tokens (requetes parametrees)
+│   ├── user.ts              CRUD D1 : users + refresh_tokens
+│   ├── project.ts           CRUD D1 : projects (create, get, rename, archive)
+│   ├── ticket.ts            CRUD D1 : tickets + ticket_messages
+│   ├── file.ts              CRUD D1 : project_files (metadata) + R2 storage helpers
+│   ├── analytics.ts         Stats admin : inscriptions, pages vues
+│   ├── oauth.ts             OAuth Google/Apple
+│   └── cookies.ts           Gestion cookies refresh token
 └── validators/
-    └── auth.ts              Schemas Zod pour chaque endpoint
+    ├── auth.ts              Schemas Zod pour auth
+    └── admin.ts             Schemas Zod pour admin
 
 db/
-└── schema.sql               Tables users + refresh_tokens, index, FK cascade
+├── schema.sql               Tables: users, refresh_tokens, projects, page_views
+└── migrations/
+    └── 002_tickets_files.sql Tables: tickets, ticket_messages, project_files + colonnes projects
 ```
 
 ## Schema de base de donnees
@@ -73,12 +94,118 @@ db/
 │ id TEXT PK (UUID v4)     │◄──┐  │ id TEXT PK (UUID v4)          │
 │ email TEXT UNIQUE         │   │  │ user_id TEXT FK ──────────────┘
 │ password_hash TEXT        │   │  │ token_hash TEXT (SHA-256)     │
-│ created_at TEXT           │   │  │ expires_at TEXT               │
-│ updated_at TEXT           │   │  │ created_at TEXT               │
-└─────────────────────────┘   │  └──────────────────────────────┘
-                               │         ON DELETE CASCADE
-                               └──────────────────────────────────
+│ username TEXT UNIQUE      │   │  │ expires_at TEXT               │
+│ first_name TEXT           │   │  │ created_at TEXT               │
+│ last_name TEXT            │   │  └──────────────────────────────┘
+│ birth_date TEXT           │   │
+│ auth_provider TEXT        │   │
+│ role TEXT                 │   │
+│ created_at TEXT           │   │
+│ updated_at TEXT           │   │
+└─────────────────────────┘   │
+          │                    │
+          │                    │
+┌─────────▼───────────────┐   │
+│       projects           │   │
+├─────────────────────────┤   │
+│ id TEXT PK               │   │
+│ user_id TEXT FK ─────────┘   │
+│ name TEXT                 │      ┌──────────────────────────────┐
+│ description TEXT          │      │       tickets                 │
+│ status TEXT               │      ├──────────────────────────────┤
+│ service_type TEXT         │◄──┐  │ id TEXT PK                    │
+│ tier TEXT                 │   │  │ project_id TEXT FK ───────────┘
+│ start_date TEXT           │   │  │ subject TEXT                  │
+│ end_date TEXT             │   │  │ status TEXT (open/resolved)   │
+│ progress INTEGER          │   │  │ created_by TEXT FK → users    │
+│ last_update TEXT          │   │  │ created_at TEXT               │
+│ deliverables_url TEXT     │   │  │ updated_at TEXT               │
+│ is_archived INTEGER       │   │  └──────────┬───────────────────┘
+│ created_by TEXT           │   │             │
+│ created_at TEXT           │   │  ┌──────────▼───────────────────┐
+│ updated_at TEXT           │   │  │    ticket_messages            │
+└─────────────────────────┘   │  ├──────────────────────────────┤
+                               │  │ id TEXT PK                    │
+                               │  │ ticket_id TEXT FK → tickets   │
+┌─────────────────────────┐   │  │ author_id TEXT FK → users     │
+│     project_files        │   │  │ content TEXT                  │
+├─────────────────────────┤   │  │ created_at TEXT               │
+│ id TEXT PK               │   │  └──────────────────────────────┘
+│ project_id TEXT FK ──────┘   │
+│ uploaded_by TEXT FK → users  │
+│ filename TEXT             │
+│ original_filename TEXT    │
+│ file_size INTEGER         │
+│ mime_type TEXT             │
+│ r2_key TEXT               │
+│ created_at TEXT           │
+└─────────────────────────┘
 ```
+
+## Endpoints API
+
+### Auth (`/api/auth`)
+
+| Methode | Route | Description | Auth |
+|---------|-------|-------------|------|
+| POST | /register | Inscription | Non |
+| POST | /login | Connexion | Non |
+| POST | /refresh | Rafraichir tokens | Non |
+| POST | /logout | Deconnexion | Oui |
+| DELETE | /delete | Supprimer compte | Oui |
+| GET | /me | Profil utilisateur | Oui |
+
+### Projets (`/api/projects`) — Auth requise
+
+| Methode | Route | Description | Acces |
+|---------|-------|-------------|-------|
+| GET | / | Liste projets du user | Owner |
+| POST | / | Creer un projet | Owner |
+| GET | /:id | Detail projet | Owner ou Admin |
+| PATCH | /:id | Renommer | Owner ou Admin |
+| DELETE | /:id | Archiver (soft delete) | Owner ou Admin |
+
+### Tickets (`/api/projects/:id/tickets`) — Auth requise
+
+| Methode | Route | Description | Acces |
+|---------|-------|-------------|-------|
+| GET | / | Liste tickets du projet | Owner ou Admin |
+| POST | / | Creer un ticket | Owner ou Admin |
+| GET | /:ticketId | Detail + messages | Owner ou Admin |
+| PATCH | /:ticketId | Changer statut | Owner ou Admin |
+| POST | /:ticketId/messages | Ajouter un message | Owner ou Admin |
+
+### Fichiers (`/api/projects/:id/files`) — Auth requise
+
+| Methode | Route | Description | Acces |
+|---------|-------|-------------|-------|
+| GET | / | Liste fichiers du projet | Owner ou Admin |
+| POST | / | Upload fichier (multipart) | Owner ou Admin |
+| GET | /:fileId/download | Telecharger fichier (stream) | Owner ou Admin |
+| DELETE | /:fileId | Supprimer fichier | Owner ou Admin |
+
+**Limites upload (non-admin uniquement) :**
+- Taille max par fichier : 25 Mo
+- Espace projet total : 100 Mo
+- Types autorises : PDF, PNG, JPG, WEBP, GIF, ZIP, RAR, 7Z, DOC(X), XLS(X), TXT, CSV
+
+### Admin (`/api/admin`) — Auth + Admin requise
+
+| Methode | Route | Description |
+|---------|-------|-------------|
+| GET | /dashboard/overview | Stats globales |
+| GET | /dashboard/signups | Inscriptions par jour |
+| GET | /dashboard/visits | Pages vues par jour |
+| GET | /users | Liste utilisateurs |
+| PATCH | /users/:id/role | Changer role (super_admin) |
+| GET | /projects | Tous les projets |
+| POST | /projects | Creer projet pour un user |
+
+### Tracking (`/api/track`) — Public
+
+| Methode | Route | Description |
+|---------|-------|-------------|
+| POST | /pageview | Enregistrer page vue |
 
 ## Flux d'authentification
 
@@ -86,34 +213,18 @@ db/
 
 | Token | Type | Duree | Stockage client | Contenu |
 |-------|------|-------|-----------------|---------|
-| Access | JWT HS256 | 15 min | Memoire JS | `{ sub, email, iat, exp }` |
-| Refresh | Opaque (64 bytes hex) | 7 jours | localStorage / cookie | Aucun (chaine aleatoire) |
+| Access | JWT HS256 | 15 min | Memoire JS | `{ sub, email, username, iat, exp }` |
+| Refresh | Opaque (64 bytes hex) | 7 jours | localStorage | Aucun (chaine aleatoire) |
 
 Le refresh token est stocke **hashe en SHA-256** dans D1 — jamais en clair.
 
-### Flux Register / Login
+### Controle d'acces projets
 
-```
-1. Client envoie email + password
-2. Server valide (Zod), hash le password (PBKDF2)
-3. Server cree/verifie le user en D1
-4. Server genere access JWT + refresh token opaque
-5. Server hash le refresh token (SHA-256) et le stocke en D1
-6. Server retourne { user, access_token, refresh_token }
-```
+Les endpoints `/api/projects` utilisent un helper `assertProjectAccess` qui verifie :
+1. Le projet existe et n'est pas archive
+2. L'utilisateur est soit le proprietaire (`user_id`), soit admin/super_admin
 
-### Flux Refresh (rotation)
-
-```
-1. Client envoie le refresh_token
-2. Server hash le token recu → cherche en D1
-3. Server SUPPRIME l'ancien token (rotation)
-4. Server genere une nouvelle paire access + refresh
-5. Server stocke le nouveau refresh hash en D1
-6. Server retourne les nouveaux tokens
-```
-
-La rotation garantit qu'un refresh token ne peut etre utilise qu'une seule fois.
+Cela permet aux admins de consulter et gerer tous les projets depuis le dashboard.
 
 ## Mesures de securite
 
@@ -126,8 +237,8 @@ La rotation garantit qu'un refresh token ne peut etre utilise qu'une seule fois.
 | Tokens hashes | Refresh tokens stockes en SHA-256, pas en clair |
 | SQL injection | Requetes parametrees exclusivement (`prepare().bind()`) |
 | Validation | Toutes les entrees validees par Zod avant traitement |
-| CORS | Limite a `race-up.net` + localhost en dev |
-| Limite MDP | 8-128 chars, 1 majuscule, 1 minuscule, 1 chiffre |
+| CORS | Limite a `raceup.com` + localhost en dev |
+| Upload validation | MIME type + taille verifie cote serveur (non-admin) |
 | IDs | UUID v4 non predictibles (`crypto.randomUUID()`) |
 
 ## Format de reponse standardise
@@ -151,9 +262,10 @@ La rotation garantit qu'un refresh token ne peut etre utilise qu'une seule fois.
 }
 ```
 
-## Contraintes Workers (free tier)
+## Bindings Cloudflare
 
-- **CPU** : 10ms par requete — PBKDF2 a 50K iterations respecte cette limite
-- **Requetes** : 100K/jour
-- **D1** : 5M lignes lues/jour, 100K ecrites/jour
-- **Taille Worker** : 1 MB compresse apres bundling
+| Binding | Type | Usage |
+|---------|------|-------|
+| DB | D1 Database | Base de donnees principale |
+| R2 | R2 Bucket | Stockage fichiers projets |
+| JWT_SECRET | Secret | Cle de signature JWT |
