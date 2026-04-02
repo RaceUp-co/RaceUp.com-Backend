@@ -20,6 +20,7 @@ export type Variables = {
     exp: number;
   };
   currentUser: User;
+  dashboardSession: DashboardSession;
 };
 
 export type AppType = {
@@ -105,4 +106,11 @@ export type PageView = {
   user_agent: string | null;
   country: string | null;
   created_at: string;
+};
+
+export type DashboardSession = {
+  userId: string;
+  email: string;
+  role: string;
+  exp: number;
 };
