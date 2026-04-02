@@ -68,10 +68,10 @@ export async function getAdminStats(
   const [usersResult, projectsResult, activeResult] = await Promise.all([
     db.prepare('SELECT COUNT(*) as count FROM users').first<{ count: number }>(),
     db
-      .prepare('SELECT COUNT(*) as count FROM projects')
+      .prepare('SELECT COUNT(*) as count FROM projects WHERE is_archived = 0')
       .first<{ count: number }>(),
     db
-      .prepare("SELECT COUNT(*) as count FROM projects WHERE status = 'in_progress'")
+      .prepare("SELECT COUNT(*) as count FROM projects WHERE status = 'in_progress' AND is_archived = 0")
       .first<{ count: number }>(),
   ]);
 

@@ -71,7 +71,7 @@ admin.get('/users', async (c) => {
       SELECT u.id, u.email, u.username, u.first_name, u.last_name, u.birth_date, u.auth_provider, u.role, u.created_at, u.updated_at,
              COUNT(p.id) as project_count
       FROM users u
-      LEFT JOIN projects p ON p.user_id = u.id
+      LEFT JOIN projects p ON p.user_id = u.id AND p.is_archived = 0
       WHERE u.first_name LIKE ? OR u.last_name LIKE ? OR u.email LIKE ? OR u.username LIKE ?
       GROUP BY u.id
       ORDER BY project_count DESC, u.created_at DESC
@@ -88,7 +88,7 @@ admin.get('/users', async (c) => {
       SELECT u.id, u.email, u.username, u.first_name, u.last_name, u.birth_date, u.auth_provider, u.role, u.created_at, u.updated_at,
              COUNT(p.id) as project_count
       FROM users u
-      LEFT JOIN projects p ON p.user_id = u.id
+      LEFT JOIN projects p ON p.user_id = u.id AND p.is_archived = 0
       GROUP BY u.id
       ORDER BY project_count DESC, u.created_at DESC
       LIMIT ? OFFSET ?
@@ -114,6 +114,47 @@ admin.get('/users', async (c) => {
       total: countResult?.total ?? 0,
       page,
       limit,
+    },
+  });
+});
+
+// GET /users/:id — Détail d'un utilisateur avec ses projets
+admin.get('/users/:id', async (c) => {
+  const userId = c.req.param('id');
+  const user = await getUserById(c.env.DB, userId);
+
+  if (!user) {
+    return c.json(
+      { success: false, error: { code: 'USER_NOT_FOUND', message: 'Utilisateur introuvable.' } },
+      404
+    );
+  }
+
+  // Récupérer les projets non archivés de l'utilisateur
+  const projectsResult = await c.env.DB
+    .prepare(
+      `SELECT id, user_id, name, description, status, service_type, tier, start_date, end_date, progress, last_update, deliverables_url, is_archived, created_by, created_at, updated_at
+       FROM projects WHERE user_id = ? AND is_archived = 0 ORDER BY created_at DESC`
+    )
+    .bind(userId)
+    .all();
+
+  return c.json({
+    success: true,
+    data: {
+      user: {
+        id: user.id,
+        email: user.email,
+        username: user.username,
+        first_name: user.first_name,
+        last_name: user.last_name,
+        birth_date: user.birth_date,
+        auth_provider: user.auth_provider,
+        role: user.role,
+        created_at: user.created_at,
+        updated_at: user.updated_at,
+      },
+      projects: projectsResult.results,
     },
   });
 });
