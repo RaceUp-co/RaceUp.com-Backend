@@ -5,8 +5,12 @@ import authRoutes from './routes/auth';
 import adminRoutes from './routes/admin';
 import projectRoutes from './routes/projects';
 import trackingRoutes from './routes/tracking';
+import { loggerMiddleware } from './middleware/logger';
 
 const app = new Hono<AppType>();
+
+// Logger — intercepts all requests for dashboard metrics
+app.use('*', loggerMiddleware);
 
 // CORS
 app.use(
