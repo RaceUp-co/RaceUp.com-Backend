@@ -44,7 +44,7 @@ projectsRoutes.get('/projects', async (c) => {
 
   return c.html(
     <Layout title="Projets" currentPath="/dashboard/projects" role={session.role}>
-      <form class="filters" method="GET" action="/dashboard/projects">
+      <form class="filters" method="get" action="/dashboard/projects">
         <select name="status">
           <option value="">Tous statuts</option>
           <option value="in_progress" selected={status === 'in_progress'}>En cours</option>

@@ -51,7 +51,7 @@ logsRoutes.get('/logs', async (c) => {
 
   return c.html(
     <Layout title="Request Logs" currentPath="/dashboard/logs" role={session.role}>
-      <form class="filters" method="GET" action="/dashboard/logs">
+      <form class="filters" method="get" action="/dashboard/logs">
         <select name="method">
           <option value="">Toutes methodes</option>
           {['GET', 'POST', 'PATCH', 'PUT', 'DELETE'].map((m) => (

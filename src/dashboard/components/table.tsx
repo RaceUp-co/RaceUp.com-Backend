@@ -34,7 +34,7 @@ export const DataTable: FC<TableProps> = ({ columns, rows, rowClass }) => {
       <tbody>
         {rows.length === 0 ? (
           <tr>
-            <td colspan={columns.length.toString()} style="text-align:center;color:#707090;padding:20px;">
+            <td colspan={columns.length} style="text-align:center;color:#707090;padding:20px;">
               Aucune donnee
             </td>
           </tr>

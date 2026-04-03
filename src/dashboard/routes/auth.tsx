@@ -16,7 +16,7 @@ authRoutes.get('/login', (c) => {
       <div class="login-box">
         <h1>RaceUp Dashboard</h1>
         {error && <div class="login-error">{decodeURIComponent(error)}</div>}
-        <form method="POST" action="/dashboard/login">
+        <form method="post" action="/dashboard/login">
           <div class="form-group">
             <label>Email</label>
             <input type="email" name="email" required autocomplete="email" />

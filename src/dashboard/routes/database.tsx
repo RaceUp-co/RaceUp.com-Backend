@@ -69,7 +69,7 @@ databaseRoutes.get('/database', async (c) => {
       )}
 
       <h2 class="section-title">Requete SQL</h2>
-      <form method="POST" action="/dashboard/database/query">
+      <form method="post" action="/dashboard/database/query">
         <div class="form-group">
           <textarea name="sql" placeholder="SELECT * FROM users LIMIT 10;" rows={5}></textarea>
         </div>
@@ -145,7 +145,7 @@ databaseRoutes.post('/database/query', async (c) => {
       )}
 
       <h2 class="section-title">Nouvelle requete</h2>
-      <form method="POST" action="/dashboard/database/query">
+      <form method="post" action="/dashboard/database/query">
         <div class="form-group">
           <textarea name="sql" rows={5}>{sql}</textarea>
         </div>

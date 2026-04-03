@@ -53,7 +53,7 @@ usersRoutes.get('/users', async (c) => {
 
   return c.html(
     <Layout title="Utilisateurs" currentPath="/dashboard/users" role={session.role}>
-      <form class="filters" method="GET" action="/dashboard/users">
+      <form class="filters" method="get" action="/dashboard/users">
         <input type="text" name="q" placeholder="Rechercher email, username..." value={q} style="width:300px;" />
         <button type="submit">Rechercher</button>
       </form>
@@ -124,7 +124,7 @@ usersRoutes.get('/users/:id', async (c) => {
       </table>
 
       {session.role === 'super_admin' && String(user.role) !== 'super_admin' && (
-        <form method="POST" action={`/dashboard/users/${userId}/role`} style="margin-bottom:20px;">
+        <form method="post" action={`/dashboard/users/${userId}/role`} style="margin-bottom:20px;">
           <div class="filters">
             <select name="role">
               <option value="user" selected={String(user.role) === 'user'}>user</option>
