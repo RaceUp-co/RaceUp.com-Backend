@@ -41,23 +41,25 @@ export async function loggerMiddleware(
   const userAgent = c.req.header('user-agent') ?? null;
 
   // Fire-and-forget: don't block the response
-  c.executionCtx.waitUntil(
-    c.env.DB.prepare(
-      'INSERT INTO request_logs (method, path, status_code, duration_ms, user_id, ip, country, user_agent, error, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  const logPromise = c.env.DB.prepare(
+    'INSERT INTO request_logs (method, path, status_code, duration_ms, user_id, ip, country, user_agent, error, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  )
+    .bind(
+      c.req.method,
+      path,
+      c.res.status,
+      duration,
+      userId,
+      ip,
+      country,
+      userAgent,
+      error,
+      new Date().toISOString()
     )
-      .bind(
-        c.req.method,
-        path,
-        c.res.status,
-        duration,
-        userId,
-        ip,
-        country,
-        userAgent,
-        error,
-        new Date().toISOString()
-      )
-      .run()
-      .catch((err) => console.error('Logger error:', err))
-  );
+    .run()
+    .catch((err) => console.error('Logger error:', err));
+
+  if (c.executionCtx?.waitUntil) {
+    c.executionCtx.waitUntil(logPromise);
+  }
 }

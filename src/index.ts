@@ -61,7 +61,9 @@ app.route('/api/track', trackingRoutes);
 app.route('/dashboard', dashboardAuthRoutes);
 
 // Dashboard — protected routes (session cookie required)
+app.use('/dashboard', dashboardAuthMiddleware);
 app.use('/dashboard/*', dashboardAuthMiddleware);
+app.get('/dashboard/', (c) => c.redirect('/dashboard'));
 app.route('/dashboard', overviewRoutes);
 app.route('/dashboard', logsRoutes);
 app.route('/dashboard', errorsRoutes);
@@ -74,12 +76,14 @@ app.route('/dashboard', configRoutes);
 // Global error handler
 app.onError((err, c) => {
   console.error(err);
+  const isDev = new URL(c.req.url).hostname === 'localhost' || new URL(c.req.url).hostname === '127.0.0.1';
   return c.json(
     {
       success: false,
       error: {
         code: 'INTERNAL_ERROR',
-        message: 'Erreur interne du serveur.',
+        message: isDev ? String(err?.message ?? err) : 'Erreur interne du serveur.',
+        ...(isDev && { stack: String(err?.stack ?? '') }),
       },
     },
     500
