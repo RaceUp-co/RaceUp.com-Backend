@@ -62,9 +62,29 @@ src/
 │   ├── admin.ts             Endpoints admin : dashboard, users, projects (admin only)
 │   ├── projects.ts          Endpoints projets : CRUD projets, tickets, fichiers (user auth)
 │   └── tracking.ts          Endpoints tracking : page views (public)
+├── dashboard/
+│   ├── styles.ts            CSS template string (dark theme monospace)
+│   ├── session.ts           HMAC cookie sign/verify + auth middleware
+│   ├── layout.tsx           Layout HTML (sidebar + main) + LoginLayout
+│   ├── components/
+│   │   ├── nav.tsx          Sidebar navigation (liens conditionnels par role)
+│   │   ├── stat-card.tsx    Carte statistique (label, value, delta)
+│   │   ├── table.tsx        DataTable generique + Pagination
+│   │   └── chart.tsx        BarChart SVG inline
+│   └── routes/
+│       ├── auth.tsx         Login/logout (GET/POST)
+│       ├── overview.tsx     Overview: stats, charts, tables
+│       ├── logs.tsx         Request logs: filtres, pagination
+│       ├── errors.tsx       Erreurs: vue liste + groupee
+│       ├── users.tsx        Users: list, detail, role change
+│       ├── projects.tsx     Projects: list, detail
+│       ├── database.tsx     SQL explorer (super_admin)
+│       ├── docs.tsx         API docs + testeur fetch()
+│       └── config.tsx       Placeholder
 ├── middleware/
 │   ├── auth.ts              Verification Bearer JWT, injection du payload dans le contexte
-│   └── admin.ts             Verification role admin/super_admin
+│   ├── admin.ts             Verification role admin/super_admin
+│   └── logger.ts            Request logging → D1 request_logs (fire-and-forget)
 ├── services/
 │   ├── password.ts          hashPassword / verifyPassword (PBKDF2, comparaison timing-safe)
 │   ├── token.ts             Generation JWT access + refresh token opaque + hash SHA-256
@@ -82,7 +102,8 @@ src/
 db/
 ├── schema.sql               Tables: users, refresh_tokens, projects, page_views
 └── migrations/
-    └── 002_tickets_files.sql Tables: tickets, ticket_messages, project_files + colonnes projects
+    ├── 002_tickets_files.sql Tables: tickets, ticket_messages, project_files + colonnes projects
+    └── 002_request_logs.sql  Table: request_logs + index (dashboard monitoring)
 ```
 
 ## Schema de base de donnees
@@ -206,6 +227,54 @@ db/
 | Methode | Route | Description |
 |---------|-------|-------------|
 | POST | /pageview | Enregistrer page vue |
+
+### Dashboard (`/dashboard`) — Cookie session HMAC, admin/super_admin
+
+Interface d'administration server-rendered avec Hono JSX SSR, dans le meme Worker.
+
+| Methode | Route | Description | Acces |
+|---------|-------|-------------|-------|
+| GET | /login | Page de connexion | Public |
+| POST | /login | Authentification → cookie HMAC | Public |
+| GET | /logout | Deconnexion | Public |
+| GET | / | Overview: stats, graphiques, top endpoints | Admin |
+| GET | /logs | Request logs avec filtres et pagination | Admin |
+| GET | /errors | Erreurs: vue liste et groupee | Admin |
+| GET | /users | Liste utilisateurs, recherche | Admin |
+| GET | /users/:id | Detail utilisateur + projets + logs | Admin |
+| POST | /users/:id/role | Changer role | Super Admin |
+| GET | /projects | Liste projets, filtre status | Admin |
+| GET | /projects/:id | Detail projet + tickets + fichiers | Admin |
+| GET | /database | SQL explorer: tables, structure | Super Admin |
+| POST | /database/query | Executer requete SQL | Super Admin |
+| GET | /docs | Documentation API + testeur integre | Admin |
+| GET | /config | Placeholder (bientot disponible) | Admin |
+
+**Authentification dashboard:**
+- Cookie `dashboard_session` signe HMAC-SHA256 avec `JWT_SECRET`
+- Payload: `{ userId, email, role, exp }` (base64url + signature)
+- HttpOnly, Secure (production), SameSite=Strict, Path=/dashboard, 2h expiry
+- Independant du systeme JWT de l'API
+
+**Middleware chain:**
+1. `loggerMiddleware` (toutes les requetes → D1 `request_logs`, fire-and-forget)
+2. `dashboardAuthMiddleware` (verifie le cookie, redirige vers /login si absent)
+3. `superAdminDashboardMiddleware` (uniquement pour /database, bloque si non super_admin)
+
+**Composants:**
+- `Layout` / `LoginLayout` — HTML shell avec sidebar
+- `Nav` — Navigation laterale, liens conditionnels par role
+- `StatCard` — Carte statistique avec valeur + delta
+- `DataTable` / `Pagination` — Tableau generique avec rendu custom
+- `BarChart` — Graphique SVG inline responsive
+
+**Table `request_logs`:**
+```sql
+request_logs (id AUTOINCREMENT, method, path, status_code, duration_ms,
+              user_id?, ip?, country?, user_agent?, error?, created_at)
+  IDX: created_at, path, status_code
+```
+Purge automatique des logs > 30 jours a chaque visite de l'overview.
 
 ## Flux d'authentification
 

@@ -30,9 +30,29 @@ src/
 │   ├── projects.ts       CRUD projets + tickets + fichiers
 │   ├── admin.ts          Dashboard stats + gestion users/projects
 │   └── tracking.ts       Page views (public)
+├── dashboard/
+│   ├── styles.ts             CSS template string
+│   ├── session.ts            HMAC cookie sign/verify/middleware
+│   ├── layout.tsx            HTML layout (head, sidebar, main) + LoginLayout
+│   ├── components/
+│   │   ├── nav.tsx           Sidebar navigation
+│   │   ├── stat-card.tsx     Stat card (value + delta)
+│   │   ├── table.tsx         Reusable DataTable + Pagination
+│   │   └── chart.tsx         SVG BarChart
+│   └── routes/
+│       ├── auth.tsx          Login/logout pages
+│       ├── overview.tsx      Stats, charts, top endpoints
+│       ├── logs.tsx          Request logs with filters
+│       ├── errors.tsx        Error list + grouped view
+│       ├── users.tsx         User list, detail, role mgmt
+│       ├── projects.tsx      Project list + detail
+│       ├── database.tsx      SQL explorer (super_admin)
+│       ├── docs.tsx          API documentation + tester
+│       └── config.tsx        Placeholder
 ├── middleware/
 │   ├── auth.ts           Bearer JWT verification → injecte jwtPayload
-│   └── admin.ts          Role check (admin/super_admin) → injecte currentUser
+│   ├── admin.ts          Role check (admin/super_admin) → injecte currentUser
+│   └── logger.ts         Request logging → D1 request_logs (fire-and-forget)
 ├── services/
 │   ├── password.ts       PBKDF2-SHA-256 hash + timing-safe verify
 │   ├── token.ts          JWT HS256 (access) + opaque 64-byte (refresh) + SHA-256 hash
@@ -128,6 +148,30 @@ R2 key: `projects/{projectId}/{uuid}.ext`
 
 | GET | /api/health | `{status:"ok", timestamp}` |
 
+### Dashboard `/dashboard` (Cookie session HMAC, admin/super_admin)
+
+| Method | Route | Description |
+|--------|-------|-------------|
+| GET | /login | Page de connexion |
+| POST | /login | Authentification (email, password) → cookie HMAC |
+| GET | /logout | Deconnexion (supprime cookie) |
+| GET | / | Overview — stats, graphiques, top endpoints |
+| GET | /logs | Request logs — filtres, pagination |
+| GET | /errors | Erreurs — vue liste et groupee |
+| GET | /users | Liste utilisateurs — recherche, pagination |
+| GET | /users/:id | Detail utilisateur + projets + logs |
+| POST | /users/:id/role | Changer role (super_admin only) |
+| GET | /projects | Liste projets — filtre status |
+| GET | /projects/:id | Detail projet + tickets + fichiers |
+| GET | /database | SQL explorer — tables, structure (super_admin only) |
+| POST | /database/query | Executer SQL (super_admin only) |
+| GET | /docs | Documentation API + testeur integre |
+| GET | /config | Placeholder — bientot disponible |
+
+**Auth**: Cookie HMAC-SHA256 signe (`dashboard_session`), HttpOnly, Secure(prod), SameSite=Strict, 2h expiry.
+**Middleware chain**: `loggerMiddleware` → `dashboardAuthMiddleware` → route handler (+ `superAdminDashboardMiddleware` pour /database).
+**Rendering**: Hono JSX SSR (server-side), pas de framework frontend.
+
 ## Database Schema D1
 
 ```sql
@@ -154,6 +198,10 @@ project_files (id PK, project_id FK→projects CASCADE, uploaded_by FK→users,
 
 page_views (id AUTOINCREMENT, path, referrer?, user_agent?, country?, created_at)
   IDX: created_at, path
+
+request_logs (id AUTOINCREMENT, method, path, status_code, duration_ms, user_id?,
+              ip?, country?, user_agent?, error?, created_at)
+  IDX: created_at, path, status_code
 ```
 
 Relations: users 1→N projects 1→N tickets 1→N ticket_messages

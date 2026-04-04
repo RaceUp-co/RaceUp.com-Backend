@@ -15,7 +15,11 @@ const COOKIE_DOMAIN_PRODUCTION = '.raceup.com';
 /**
  * Vérifie si l'environnement est en production
  */
-function isProduction(env: { ENVIRONMENT?: string }): boolean {
+function isProduction(env: { ENVIRONMENT?: string }, c?: Context): boolean {
+  if (c) {
+    const hostname = new URL(c.req.url).hostname;
+    if (hostname === 'localhost' || hostname === '127.0.0.1') return false;
+  }
   return env.ENVIRONMENT === 'production';
 }
 
@@ -30,7 +34,7 @@ export function setSessionCookie(
   refreshToken: string,
   env: { ENVIRONMENT?: string }
 ): void {
-  const secure = isProduction(env);
+  const secure = isProduction(env, c);
   
   setCookie(c, 'raceup_session', refreshToken, {
     httpOnly: true,
@@ -53,7 +57,7 @@ export function getSessionCookie(c: Context): string | undefined {
  * Supprime le cookie de session (logout)
  */
 export function clearSessionCookie(c: Context, env: { ENVIRONMENT?: string }): void {
-  const secure = isProduction(env);
+  const secure = isProduction(env, c);
   
   deleteCookie(c, 'raceup_session', {
     path: '/',
