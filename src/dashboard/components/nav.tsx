@@ -7,7 +7,7 @@ type NavProps = {
 
 export const Nav: FC<NavProps> = ({ currentPath, role }) => {
   const items = [
-    { href: '/dashboard/', label: 'Overview' },
+    { href: '/dashboard', label: 'Overview' },
     { href: '/dashboard/logs', label: 'Logs' },
     { href: '/dashboard/errors', label: 'Erreurs' },
     { href: '/dashboard/users', label: 'Utilisateurs' },

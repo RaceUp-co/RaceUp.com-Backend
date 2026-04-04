@@ -91,10 +91,10 @@ overviewRoutes.get('/', async (c) => {
   }));
 
   return c.html(
-    <Layout title="Overview" currentPath="/dashboard/" role={session.role}>
+    <Layout title="Overview" currentPath="/dashboard" role={session.role}>
       <div class="period-selector">
         {['24h', '7d', '30d'].map((p) => (
-          <a href={`/dashboard/?period=${p}`} class={period === p ? 'active' : ''}>{p}</a>
+          <a href={`/dashboard?period=${p}`} class={period === p ? 'active' : ''}>{p}</a>
         ))}
       </div>
 

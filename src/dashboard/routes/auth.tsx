@@ -49,7 +49,7 @@ authRoutes.post('/login', async (c) => {
   }
 
   await createSessionCookie(c, result.userId!, email, result.role!);
-  return c.redirect('/dashboard/');
+  return c.redirect('/dashboard');
 });
 
 authRoutes.get('/logout', (c) => {
