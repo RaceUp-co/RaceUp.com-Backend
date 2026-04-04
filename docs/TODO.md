@@ -32,6 +32,12 @@
 - [ ] Creer un endpoint d'admin pour lister/gerer les utilisateurs
 - [ ] Ajouter des metriques et monitoring (Cloudflare Analytics)
 
+## Dashboard - Fonctionnalites futures
+
+- [ ] Systeme de feature flags pour activer/desactiver des routes API (table D1 + middleware check). Ajouter un onglet "Configuration" dans le dashboard.
+- [ ] Systeme de cles API (generation, revocation, rate limiting par cle). Table D1 `api_keys` + middleware d'authentification par cle.
+- [ ] Migrer le stockage des request_logs de D1 vers Cloudflare Analytics Engine (quand le volume de trafic le justifiera). Raison : D1 suffit pour un trafic modere mais Analytics Engine est concu pour les metriques haute frequence et ne surcharge pas la DB.
+
 ## Fait
 
 - [x] Structure du projet (Hono + TypeScript + D1)
