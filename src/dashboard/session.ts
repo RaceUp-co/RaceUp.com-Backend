@@ -51,7 +51,9 @@ export async function createSessionCookie(
   const sigB64 = base64UrlEncode(signature);
   const cookieValue = `${payloadB64}.${sigB64}`;
 
-  const isProd = c.env.ENVIRONMENT === 'production';
+  const hostname = new URL(c.req.url).hostname;
+  const isLocal = hostname === 'localhost' || hostname === '127.0.0.1';
+  const isProd = c.env.ENVIRONMENT === 'production' && !isLocal;
   setCookie(c, COOKIE_NAME, cookieValue, {
     path: '/dashboard',
     httpOnly: true,
