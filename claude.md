@@ -28,7 +28,8 @@ src/
 ├── routes/
 │   ├── auth.ts           Auth endpoints (register, login, OAuth, refresh, me, logout, delete)
 │   ├── projects.ts       CRUD projets + tickets + fichiers
-│   ├── admin.ts          Dashboard stats + gestion users/projects
+│   ├── admin.ts          Dashboard stats + gestion users/projects + support tickets
+│   ├── support.ts        Support ticket endpoint (public POST)
 │   └── tracking.ts       Page views (public)
 ├── dashboard/
 │   ├── styles.ts             CSS template string
@@ -62,10 +63,12 @@ src/
 │   ├── file.ts           CRUD fichiers metadata D1 + helpers R2
 │   ├── analytics.ts      Stats admin (inscriptions, pages vues, dashboard overview)
 │   ├── oauth.ts          Verification Google (userinfo API) + Apple (JWKS RS256)
-│   └── cookies.ts        Cookie HttpOnly raceup_session (refresh token)
+│   ├── cookies.ts        Cookie HttpOnly raceup_session (refresh token)
+│   └── support.ts        CRUD support tickets (create, list, getById, close)
 ├── validators/
 │   ├── auth.ts           Schemas Zod (register, login, OAuth)
-│   └── admin.ts          Schemas Zod (projets, role update)
+│   ├── admin.ts          Schemas Zod (projets, role update)
+│   └── support.ts        Schemas Zod (support ticket creation, filters)
 db/
 ├── schema.sql            Tables initiales
 └── migrations/           Evolutions schema (appliquees via wrangler d1 execute)
@@ -138,6 +141,20 @@ R2 key: `projects/{projectId}/{uuid}.ext`
 | GET | /projects | Tous les projets non archives |
 | POST | /projects | Cree projet pour un user (user_id, name, service_type, start_date...) |
 
+### Support `/api/support` (public)
+
+| Method | Route | Auth | Description |
+|--------|-------|------|-------------|
+| POST | / | - | Cree un ticket support (email, name, category, message, metadata?) |
+
+### Admin Support `/api/admin/support-tickets` (JWT + admin)
+
+| Method | Route | Description |
+|--------|-------|-------------|
+| GET | /?status=&category=&priority=&page=1&limit=20 | Liste tickets (filtres + pagination) |
+| GET | /:id | Detail ticket |
+| PATCH | /:id | Fermer ticket (status: closed) |
+
 ### Tracking `/api/track` (public)
 
 | Method | Route | Description |
@@ -202,12 +219,18 @@ page_views (id AUTOINCREMENT, path, referrer?, user_agent?, country?, created_at
 request_logs (id AUTOINCREMENT, method, path, status_code, duration_ms, user_id?,
               ip?, country?, user_agent?, error?, created_at)
   IDX: created_at, path, status_code
+
+support_tickets (id PK, email, name, category, priority['urgent'|'normal'|'low'],
+                 subject, message, metadata JSON?, status['open'|'closed'],
+                 created_at, closed_at?)
+  IDX: status, category, priority, created_at
 ```
 
 Relations: users 1→N projects 1→N tickets 1→N ticket_messages
                               1→N project_files
            users 1→N refresh_tokens
            page_views: standalone
+           support_tickets: standalone (pas de FK vers users)
 
 ## Patterns importants
 

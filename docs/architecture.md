@@ -61,6 +61,7 @@ src/
 │   ├── auth.ts              Endpoints auth : register, login, refresh, logout, delete, me
 │   ├── admin.ts             Endpoints admin : dashboard, users, projects (admin only)
 │   ├── projects.ts          Endpoints projets : CRUD projets, tickets, fichiers (user auth)
+│   ├── support.ts           Endpoints support tickets : creation publique
 │   └── tracking.ts          Endpoints tracking : page views (public)
 ├── dashboard/
 │   ├── styles.ts            CSS template string (dark theme monospace)
@@ -93,17 +94,20 @@ src/
 │   ├── ticket.ts            CRUD D1 : tickets + ticket_messages
 │   ├── file.ts              CRUD D1 : project_files (metadata) + R2 storage helpers
 │   ├── analytics.ts         Stats admin : inscriptions, pages vues
+│   ├── support.ts           CRUD D1 : support_tickets (public, sans FK users)
 │   ├── oauth.ts             OAuth Google/Apple
 │   └── cookies.ts           Gestion cookies refresh token
 └── validators/
     ├── auth.ts              Schemas Zod pour auth
-    └── admin.ts             Schemas Zod pour admin
+    ├── admin.ts             Schemas Zod pour admin
+    └── support.ts           Schemas Zod pour support tickets
 
 db/
 ├── schema.sql               Tables: users, refresh_tokens, projects, page_views
 └── migrations/
-    ├── 002_tickets_files.sql Tables: tickets, ticket_messages, project_files + colonnes projects
-    └── 002_request_logs.sql  Table: request_logs + index (dashboard monitoring)
+    ├── 002_tickets_files.sql    Tables: tickets, ticket_messages, project_files + colonnes projects
+    ├── 002_request_logs.sql     Table: request_logs + index (dashboard monitoring)
+    └── 005-support-tickets.sql  Table: support_tickets + index (system ticketing public)
 ```
 
 ## Schema de base de donnees
@@ -221,6 +225,24 @@ db/
 | PATCH | /users/:id/role | Changer role (super_admin) |
 | GET | /projects | Tous les projets |
 | POST | /projects | Creer projet pour un user |
+
+### Support Tickets (`/api/support`) — Public
+
+| Methode | Route | Description | Auth |
+|---------|-------|-------------|------|
+| POST | / | Creer un ticket support | Non |
+
+**Categories :** `account_issue`, `account_hacked`, `project_inaccessible`, `bug`, `billing`, `gdpr`, `question`, `other`
+
+**Priorite automatique :** `urgent` (account_hacked, gdpr) | `normal` (account_issue, project_inaccessible, bug, billing) | `low` (question, other)
+
+### Admin support (`/api/admin/support-tickets`) — Auth + Admin requise
+
+| Methode | Route | Description |
+|---------|-------|-------------|
+| GET | /support-tickets | Liste tickets avec filtres (status, category, priority, page, limit) |
+| GET | /support-tickets/:id | Detail d'un ticket |
+| PATCH | /support-tickets/:id | Fermer un ticket (`{ status: "closed" }`) |
 
 ### Tracking (`/api/track`) — Public
 
