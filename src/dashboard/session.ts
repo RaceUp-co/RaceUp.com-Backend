@@ -53,14 +53,14 @@ export async function createSessionCookie(
 
   const hostname = new URL(c.req.url).hostname;
   const isLocal = hostname === 'localhost' || hostname === '127.0.0.1';
-  const isProd = c.env.ENVIRONMENT === 'production' && !isLocal;
+  const isRaceup = hostname.endsWith('.raceup.com') || hostname === 'raceup.com';
   setCookie(c, COOKIE_NAME, cookieValue, {
     path: '/dashboard',
     httpOnly: true,
-    secure: isProd,
+    secure: !isLocal,
     sameSite: 'Strict',
     maxAge: SESSION_DURATION,
-    ...(isProd ? { domain: '.raceup.com' } : {}),
+    ...(isRaceup ? { domain: '.raceup.com' } : {}),
   });
 }
 

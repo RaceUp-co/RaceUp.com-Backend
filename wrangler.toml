@@ -7,7 +7,6 @@ compatibility_flags = ["nodejs_compat"]
 binding = "DB"
 database_name = "RaceUp-User-Data"
 database_id = "da5708b9-9979-44f1-a979-5a822bad00c1"
-remote = true
 
 [[r2_buckets]]
 binding = "R2"
