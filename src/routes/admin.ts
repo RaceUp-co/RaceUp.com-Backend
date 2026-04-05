@@ -7,6 +7,15 @@ import {
   createProjectSchema,
   updateUserRoleSchema,
 } from '../validators/admin';
+import {
+  getSupportTickets,
+  getSupportTicketById,
+  closeSupportTicket,
+} from '../services/support';
+import {
+  supportTicketFilterSchema,
+  closeSupportTicketSchema,
+} from '../validators/support';
 import { createProject, getAllProjects } from '../services/project';
 import {
   getAdminStats,
@@ -260,6 +269,57 @@ admin.post(
     );
   }
 );
+
+// GET /support-tickets — Liste tickets support avec filtres + pagination
+admin.get('/support-tickets', async (c) => {
+  const url = new URL(c.req.url);
+  const parsed = supportTicketFilterSchema.safeParse({
+    status: url.searchParams.get('status') || undefined,
+    category: url.searchParams.get('category') || undefined,
+    priority: url.searchParams.get('priority') || undefined,
+    page: url.searchParams.get('page') || 1,
+    limit: url.searchParams.get('limit') || 20,
+  });
+
+  if (!parsed.success) {
+    return c.json({ success: false, error: { code: 'INVALID_PARAMS', message: 'Paramètres invalides.' } }, 400);
+  }
+
+  const result = await getSupportTickets(c.env.DB, parsed.data);
+
+  return c.json({
+    success: true,
+    data: result,
+  });
+});
+
+// GET /support-tickets/:id — Detail ticket support
+admin.get('/support-tickets/:id', async (c) => {
+  const ticket = await getSupportTicketById(c.env.DB, c.req.param('id'));
+
+  if (!ticket) {
+    return c.json({ success: false, error: { code: 'NOT_FOUND', message: 'Ticket introuvable.' } }, 404);
+  }
+
+  return c.json({
+    success: true,
+    data: { ticket },
+  });
+});
+
+// PATCH /support-tickets/:id — Fermer un ticket
+admin.patch('/support-tickets/:id', zValidator('json', closeSupportTicketSchema), async (c) => {
+  const updated = await closeSupportTicket(c.env.DB, c.req.param('id'));
+
+  if (!updated) {
+    return c.json({ success: false, error: { code: 'NOT_FOUND', message: 'Ticket introuvable.' } }, 404);
+  }
+
+  return c.json({
+    success: true,
+    data: { message: 'Ticket fermé avec succès.' },
+  });
+});
 
 // Helper pour exécuter les requêtes préparées avec bindings dynamiques
 async function db(database: D1Database, query: string, bindings: unknown[]) {

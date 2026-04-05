@@ -114,3 +114,17 @@ export type DashboardSession = {
   role: string;
   exp: number;
 };
+
+export type SupportTicket = {
+  id: string;
+  email: string;
+  name: string;
+  category: string;
+  priority: string;
+  subject: string;
+  message: string;
+  metadata: string | null;
+  status: 'open' | 'closed';
+  created_at: string;
+  closed_at: string | null;
+};
