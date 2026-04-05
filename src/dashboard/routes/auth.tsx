@@ -36,7 +36,7 @@ authRoutes.get('/login', (c) => {
 
 authRoutes.post('/login', async (c) => {
   const body = await c.req.parseBody();
-  const email = String(body['email'] ?? '');
+  const email = String(body['email'] ?? '').toLowerCase().trim();
   const password = String(body['password'] ?? '');
 
   if (!email || !password) {
