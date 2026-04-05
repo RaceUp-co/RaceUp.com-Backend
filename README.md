@@ -11,10 +11,18 @@ API REST d'authentification pour **race-up.net**, deployee sur Cloudflare Worker
 - **Web Crypto API** — Hachage PBKDF2 + JWT natifs
 
 ## Moniteur 
+
+### Local
 Pour acceder au Moniteur passer par se lien quand l'API est active : 
 http://localhost:8787/dashboard/login
 
 L'API utilise la DB et le bucket R2 de production même lorsqu'on accede a l'API en local alos précaution lors de son utilisation
+
+### Production 
+
+Le moniteur est aussi fonctionnel en production a l'adresse suivante : 
+https://raceup-backend-api.jacqueslucas-m2101.workers.dev/dashboard/login
+
 
 ## Prerequis
 
