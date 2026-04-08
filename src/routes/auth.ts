@@ -31,6 +31,7 @@ import {
 import { verifyGoogleToken, verifyAppleToken } from '../services/oauth';
 import { authMiddleware } from '../middleware/auth';
 import { setSessionCookie, getSessionCookie, clearSessionCookie } from '../services/cookies';
+import { logSecurityEvent } from '../services/security';
 
 const auth = new Hono<AppType>();
 
@@ -134,8 +135,11 @@ auth.post('/register', zValidator('json', registerSchema), async (c) => {
 auth.post('/login', zValidator('json', loginSchema), async (c) => {
   const { email, password } = c.req.valid('json');
 
+  const ip = c.req.header('cf-connecting-ip') ?? c.req.header('x-forwarded-for') ?? null;
+
   const user = await getUserByEmail(c.env.DB, email);
   if (!user) {
+    logSecurityEvent(c.env.DB, { event_type: 'login_failed', ip, details: `email=${email} (not found)` });
     return c.json(
       {
         success: false,
@@ -164,6 +168,7 @@ auth.post('/login', zValidator('json', loginSchema), async (c) => {
 
   const isValid = await verifyPassword(password, user.password_hash);
   if (!isValid) {
+    logSecurityEvent(c.env.DB, { event_type: 'login_failed', user_id: user.id, ip, details: `email=${email} (wrong password)` });
     return c.json(
       {
         success: false,
@@ -182,6 +187,8 @@ auth.post('/login', zValidator('json', loginSchema), async (c) => {
 
   // Cookie HttpOnly pour persistance de session
   setSessionCookie(c, refreshToken, c.env);
+
+  logSecurityEvent(c.env.DB, { event_type: 'login_success', user_id: user.id, ip });
 
   return c.json({
     success: true,
@@ -519,7 +526,9 @@ auth.delete(
       }
     }
 
+    const ip = c.req.header('cf-connecting-ip') ?? c.req.header('x-forwarded-for') ?? null;
     await deleteUser(c.env.DB, user.id);
+    logSecurityEvent(c.env.DB, { event_type: 'account_deleted', user_id: user.id, ip, details: `email=${user.email} (self-delete)` });
 
     return c.json({
       success: true,

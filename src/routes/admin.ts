@@ -16,13 +16,15 @@ import {
   supportTicketFilterSchema,
   closeSupportTicketSchema,
 } from '../validators/support';
-import { createProject, getAllProjects } from '../services/project';
+import { createProject } from '../services/project';
+import { deleteUser } from '../services/user';
 import {
   getAdminStats,
   getRegistrationStats,
   getPageViewStats,
 } from '../services/analytics';
 import { getUserById } from '../services/user';
+import { logSecurityEvent } from '../services/security';
 
 const admin = new Hono<AppType>();
 
@@ -206,9 +208,17 @@ admin.patch(
       );
     }
 
+    const currentUser = c.get('currentUser');
     await c.env.DB.prepare('UPDATE users SET role = ?, updated_at = ? WHERE id = ?')
       .bind(role, new Date().toISOString(), userId)
       .run();
+
+    logSecurityEvent(c.env.DB, {
+      event_type: 'role_changed',
+      user_id: currentUser.id,
+      target_user_id: userId,
+      details: `${user.role} → ${role} (by ${currentUser.email})`,
+    });
 
     return c.json({
       success: true,
@@ -227,14 +237,144 @@ admin.patch(
   }
 );
 
-// GET /projects — Tous les projets
+// GET /projects?status=&page=1&limit=50 — Tous les projets avec pagination
 admin.get('/projects', async (c) => {
-  const projects = await getAllProjects(c.env.DB);
+  const page = parseInt(c.req.query('page') ?? '1', 10);
+  const limit = Math.min(parseInt(c.req.query('limit') ?? '50', 10), 100);
+  const offset = (page - 1) * limit;
+  const status = c.req.query('status') ?? '';
+  const archived = c.req.query('archived') === '1';
+
+  let where = archived ? 'WHERE p.is_archived = 1' : 'WHERE p.is_archived = 0';
+  const bindings: unknown[] = [];
+  const countBindings: unknown[] = [];
+
+  if (status && !archived) {
+    where += ' AND p.status = ?';
+    bindings.push(status);
+    countBindings.push(status);
+  }
+
+  const [projectsResult, countResult] = await Promise.all([
+    db(c.env.DB, `
+      SELECT p.id, p.user_id, p.name, p.description, p.status, p.service_type, p.tier,
+             p.start_date, p.end_date, p.progress, p.last_update, p.deliverables_url,
+             p.is_archived, p.created_by, p.created_at, p.updated_at,
+             u.email as user_email
+      FROM projects p
+      LEFT JOIN users u ON u.id = p.user_id
+      ${where}
+      ORDER BY p.created_at DESC
+      LIMIT ? OFFSET ?
+    `, [...bindings, limit, offset]),
+    c.env.DB.prepare(`SELECT COUNT(*) as total FROM projects p ${where}`)
+      .bind(...countBindings).first<{ total: number }>(),
+  ]);
 
   return c.json({
     success: true,
-    data: { projects },
+    data: {
+      projects: projectsResult,
+      total: countResult?.total ?? 0,
+      page,
+      limit,
+    },
   });
+});
+
+// PATCH /projects/:id — Modifier un projet (admin)
+admin.patch('/projects/:id', async (c) => {
+  const projectId = c.req.param('id');
+  const project = await c.env.DB.prepare('SELECT id FROM projects WHERE id = ?').bind(projectId).first();
+
+  if (!project) {
+    return c.json({ success: false, error: { code: 'NOT_FOUND', message: 'Projet introuvable.' } }, 404);
+  }
+
+  const body = await c.req.json();
+  const fields: string[] = [];
+  const values: unknown[] = [];
+
+  const allowedFields: Record<string, (v: unknown) => unknown> = {
+    name: (v) => String(v),
+    description: (v) => String(v),
+    service_type: (v) => String(v),
+    tier: (v) => v ? String(v) : null,
+    status: (v) => {
+      const s = String(v);
+      if (!['in_progress', 'completed', 'paused'].includes(s)) throw new Error('Invalid status');
+      return s;
+    },
+    progress: (v) => Math.min(100, Math.max(0, Number(v))),
+    start_date: (v) => v ? String(v) : null,
+    end_date: (v) => v ? String(v) : null,
+    deliverables_url: (v) => v ? String(v) : null,
+    is_archived: (v) => Number(v) ? 1 : 0,
+  };
+
+  for (const [key, transform] of Object.entries(allowedFields)) {
+    if (key in body) {
+      try {
+        fields.push(`${key} = ?`);
+        values.push(transform(body[key]));
+      } catch (_) {
+        return c.json({ success: false, error: { code: 'INVALID_INPUT', message: `Valeur invalide pour ${key}.` } }, 400);
+      }
+    }
+  }
+
+  if (fields.length === 0) {
+    return c.json({ success: false, error: { code: 'INVALID_INPUT', message: 'Aucun champ a modifier.' } }, 400);
+  }
+
+  const now = new Date().toISOString();
+  fields.push('last_update = ?', 'updated_at = ?');
+  values.push(now, now, projectId);
+
+  await c.env.DB.prepare(`UPDATE projects SET ${fields.join(', ')} WHERE id = ?`)
+    .bind(...values).run();
+
+  const updated = await c.env.DB.prepare('SELECT * FROM projects WHERE id = ?').bind(projectId).first();
+  return c.json({ success: true, data: { project: updated } });
+});
+
+// DELETE /users/:id — Supprimer un utilisateur (super_admin)
+admin.delete('/users/:id', async (c) => {
+  const currentUser = c.get('currentUser');
+  if (currentUser.role !== 'super_admin') {
+    return c.json({ success: false, error: { code: 'FORBIDDEN', message: 'Seul un super_admin peut supprimer un utilisateur.' } }, 403);
+  }
+
+  const userId = c.req.param('id');
+  const user = await getUserById(c.env.DB, userId);
+
+  if (!user) {
+    return c.json({ success: false, error: { code: 'USER_NOT_FOUND', message: 'Utilisateur introuvable.' } }, 404);
+  }
+
+  if (user.role === 'super_admin') {
+    return c.json({ success: false, error: { code: 'FORBIDDEN', message: 'Impossible de supprimer un super-administrateur.' } }, 403);
+  }
+
+  // Delete R2 files
+  const files = await c.env.DB.prepare(
+    'SELECT r2_key FROM project_files WHERE project_id IN (SELECT id FROM projects WHERE user_id = ?)'
+  ).bind(userId).all();
+
+  for (const file of (files?.results ?? [])) {
+    try { await c.env.R2.delete(String(file.r2_key)); } catch (_) { /* best-effort */ }
+  }
+
+  logSecurityEvent(c.env.DB, {
+    event_type: 'admin_user_deleted',
+    user_id: currentUser.id,
+    target_user_id: userId,
+    details: `email=${user.email} deleted by ${currentUser.email}`,
+  });
+
+  await deleteUser(c.env.DB, userId);
+
+  return c.json({ success: true, data: { message: 'Utilisateur supprime.' } });
 });
 
 // POST /projects — Créer un projet pour un utilisateur
