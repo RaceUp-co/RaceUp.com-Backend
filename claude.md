@@ -23,12 +23,12 @@
 
 ```
 src/
-├── index.ts              Point d'entree, CORS, error handlers
+├── index.ts              Point d'entree, security headers, CORS, error handlers
 ├── types.ts              Bindings, Variables, User, Project, Ticket, etc.
 ├── routes/
-│   ├── auth.ts           Auth endpoints (register, login, OAuth, refresh, me, logout, delete)
+│   ├── auth.ts           Auth endpoints (register, login, OAuth, refresh, me, logout, delete) + security logging
 │   ├── projects.ts       CRUD projets + tickets + fichiers
-│   ├── admin.ts          Dashboard stats + gestion users/projects + support tickets
+│   ├── admin.ts          Dashboard stats + gestion users/projects (CRUD+delete+patch) + support tickets + security logging
 │   ├── support.ts        Support ticket endpoint (public POST)
 │   └── tracking.ts       Page views (public)
 ├── dashboard/
@@ -45,9 +45,9 @@ src/
 │       ├── overview.tsx      Stats, charts, top endpoints
 │       ├── logs.tsx          Request logs with filters
 │       ├── errors.tsx        Error list + grouped view
-│       ├── users.tsx         User list, detail, role mgmt
-│       ├── projects.tsx      Project list + detail
-│       ├── database.tsx      SQL explorer (super_admin)
+│       ├── users.tsx         User list, detail, edit profile, role mgmt, delete with confirmation
+│       ├── projects.tsx      Project list (active+archived), detail, edit all fields, archive/restore
+│       ├── database.tsx      MPD schema (SVG), tables explorer, SQL query (super_admin)
 │       ├── docs.tsx          API documentation + tester
 │       └── config.tsx        Placeholder
 ├── middleware/
@@ -62,6 +62,7 @@ src/
 │   ├── ticket.ts         CRUD tickets + messages
 │   ├── file.ts           CRUD fichiers metadata D1 + helpers R2
 │   ├── analytics.ts      Stats admin (inscriptions, pages vues, dashboard overview)
+│   ├── security.ts       Security event logging → D1 security_events (fire-and-forget)
 │   ├── oauth.ts          Verification Google (userinfo API) + Apple (JWKS RS256)
 │   ├── cookies.ts        Cookie HttpOnly raceup_session (refresh token)
 │   └── support.ts        CRUD support tickets (create, list, getById, close)
@@ -72,6 +73,7 @@ src/
 db/
 ├── schema.sql            Tables initiales
 └── migrations/           Evolutions schema (appliquees via wrangler d1 execute)
+    └── 006-security-events.sql  Table security_events + index
 docs/
 ├── architecture.md       Documentation complete (source de verite)
 └── TODO.md               Roadmap
@@ -137,9 +139,11 @@ R2 key: `projects/{projectId}/{uuid}.ext`
 | GET | /dashboard/visits?days=30 | Pages vues/jour (time series) |
 | GET | /users?q=&page=1&limit=50 | Liste users (search, pagination, project_count) |
 | GET | /users/:id | Detail user + ses projets non archives |
-| PATCH | /users/:id/role | Change role — **super_admin only** |
-| GET | /projects | Tous les projets non archives |
+| PATCH | /users/:id/role | Change role — **super_admin only** (+ security log) |
+| DELETE | /users/:id | Supprimer user — **super_admin only** (+ R2 cleanup + security log) |
+| GET | /projects?status=&page=1&limit=50&archived=0\|1 | Projets avec pagination et filtres |
 | POST | /projects | Cree projet pour un user (user_id, name, service_type, start_date...) |
+| PATCH | /projects/:id | Modifier un projet (tous les attributs editables) |
 
 ### Support `/api/support` (public)
 
@@ -175,18 +179,26 @@ R2 key: `projects/{projectId}/{uuid}.ext`
 | GET | / | Overview — stats, graphiques, top endpoints |
 | GET | /logs | Request logs — filtres, pagination |
 | GET | /errors | Erreurs — vue liste et groupee |
-| GET | /users | Liste utilisateurs — recherche, pagination |
-| GET | /users/:id | Detail utilisateur + projets + logs |
+| GET | /users | Liste utilisateurs — recherche, filtre role, pagination |
+| GET | /users/:id | Detail utilisateur + edition profil + projets + logs |
+| POST | /users/:id/edit | Modifier profil utilisateur |
 | POST | /users/:id/role | Changer role (super_admin only) |
-| GET | /projects | Liste projets — filtre status |
-| GET | /projects/:id | Detail projet + tickets + fichiers |
-| GET | /database | SQL explorer — tables, structure (super_admin only) |
+| GET | /users/:id/delete | Page confirmation suppression (super_admin only) |
+| POST | /users/:id/delete | Supprimer utilisateur hard delete + R2 (super_admin only) |
+| GET | /projects | Liste projets actifs/archives — filtre status, pagination |
+| GET | /projects/:id | Detail projet + edition tous attributs + tickets + fichiers |
+| POST | /projects/:id/edit | Modifier projet (tous les champs) |
+| POST | /projects/:id/archive | Archiver projet |
+| POST | /projects/:id/restore | Restaurer projet archive |
+| GET | /database?tab=schema | Schema MPD visuel SVG (super_admin only) |
+| GET | /database?tab=tables | Tables explorer + structure + FK + index (super_admin only) |
+| GET | /database?tab=query | Interface requete SQL (super_admin only) |
 | POST | /database/query | Executer SQL (super_admin only) |
 | GET | /docs | Documentation API + testeur integre |
 | GET | /config | Placeholder — bientot disponible |
 
 **Auth**: Cookie HMAC-SHA256 signe (`dashboard_session`), HttpOnly, Secure(prod), SameSite=Strict, 2h expiry.
-**Middleware chain**: `loggerMiddleware` → `dashboardAuthMiddleware` → route handler (+ `superAdminDashboardMiddleware` pour /database).
+**Middleware chain**: Security headers → `loggerMiddleware` → `dashboardAuthMiddleware` → route handler (+ `superAdminDashboardMiddleware` pour /database).
 **Rendering**: Hono JSX SSR (server-side), pas de framework frontend.
 
 ## Database Schema D1
@@ -224,6 +236,11 @@ support_tickets (id PK, email, name, category, priority['urgent'|'normal'|'low']
                  subject, message, metadata JSON?, status['open'|'closed'],
                  created_at, closed_at?)
   IDX: status, category, priority, created_at
+
+security_events (id AUTOINCREMENT, event_type['login_failed'|'login_success'|'account_deleted'|
+                 'role_changed'|'password_changed'|'email_changed'|'admin_user_deleted'],
+                 user_id?, target_user_id?, ip?, details?, created_at)
+  IDX: created_at, event_type, user_id
 ```
 
 Relations: users 1→N projects 1→N tickets 1→N ticket_messages
