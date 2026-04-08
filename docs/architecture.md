@@ -15,6 +15,7 @@ Client (raceup.com)
 │  ┌────────────────────┐  │
 │  │   Hono Framework   │  │
 │  │                    │  │
+│  │  Security Headers  │  │
 │  │  CORS ─► Routes    │  │
 │  │          │         │  │
 │  │     Middleware JWT  │  │
@@ -22,7 +23,8 @@ Client (raceup.com)
 │  │     Services       │  │
 │  │   (password,token, │  │
 │  │    project,ticket, │  │
-│  │    file,analytics) │  │
+│  │    file,analytics, │  │
+│  │    security)       │  │
 │  └─────────┬──────────┘  │
 │            │              │
 │  ┌─────────▼──────────┐  │
@@ -55,11 +57,11 @@ Client (raceup.com)
 
 ```
 src/
-├── index.ts                 Point d'entree, CORS, error handlers, montage routes
+├── index.ts                 Point d'entree, security headers, CORS, error handlers, montage routes
 ├── types.ts                 Types TS : Bindings, Variables, AppType, User, Project, Ticket, etc.
 ├── routes/
-│   ├── auth.ts              Endpoints auth : register, login, refresh, logout, delete, me
-│   ├── admin.ts             Endpoints admin : dashboard, users, projects (admin only)
+│   ├── auth.ts              Endpoints auth : register, login, refresh, logout, delete, me + security logging
+│   ├── admin.ts             Endpoints admin : dashboard, users (CRUD+delete), projects (CRUD+patch) + support tickets
 │   ├── projects.ts          Endpoints projets : CRUD projets, tickets, fichiers (user auth)
 │   ├── support.ts           Endpoints support tickets : creation publique
 │   └── tracking.ts          Endpoints tracking : page views (public)
@@ -77,9 +79,9 @@ src/
 │       ├── overview.tsx     Overview: stats, charts, tables
 │       ├── logs.tsx         Request logs: filtres, pagination
 │       ├── errors.tsx       Erreurs: vue liste + groupee
-│       ├── users.tsx        Users: list, detail, role change
-│       ├── projects.tsx     Projects: list, detail
-│       ├── database.tsx     SQL explorer (super_admin)
+│       ├── users.tsx        Users: list, detail, edit profil, role change, delete with confirmation
+│       ├── projects.tsx     Projects: list (actifs+archives), detail, edit all fields, archive/restore
+│       ├── database.tsx     Schema MPD (SVG), tables explorer, SQL query (super_admin)
 │       ├── docs.tsx         API docs + testeur fetch()
 │       └── config.tsx       Placeholder
 ├── middleware/
@@ -95,6 +97,7 @@ src/
 │   ├── file.ts              CRUD D1 : project_files (metadata) + R2 storage helpers
 │   ├── analytics.ts         Stats admin : inscriptions, pages vues
 │   ├── support.ts           CRUD D1 : support_tickets (public, sans FK users)
+│   ├── security.ts          Security event logging → D1 security_events (fire-and-forget)
 │   ├── oauth.ts             OAuth Google/Apple
 │   └── cookies.ts           Gestion cookies refresh token
 └── validators/
@@ -107,7 +110,8 @@ db/
 └── migrations/
     ├── 002_tickets_files.sql    Tables: tickets, ticket_messages, project_files + colonnes projects
     ├── 002_request_logs.sql     Table: request_logs + index (dashboard monitoring)
-    └── 005-support-tickets.sql  Table: support_tickets + index (system ticketing public)
+    ├── 005-support-tickets.sql  Table: support_tickets + index (system ticketing public)
+    └── 006-security-events.sql  Table: security_events + index (audit logging)
 ```
 
 ## Schema de base de donnees
@@ -165,6 +169,19 @@ db/
 │ r2_key TEXT               │
 │ created_at TEXT           │
 └─────────────────────────┘
+
+┌──────────────────────────────┐
+│      security_events          │
+├──────────────────────────────┤
+│ id INTEGER PK AUTOINCREMENT   │
+│ event_type TEXT                │
+│ user_id TEXT                   │
+│ target_user_id TEXT            │
+│ ip TEXT                        │
+│ details TEXT                   │
+│ created_at TEXT                │
+└──────────────────────────────┘
+  IDX: created_at, event_type, user_id
 ```
 
 ## Endpoints API
@@ -174,11 +191,17 @@ db/
 | Methode | Route | Description | Auth |
 |---------|-------|-------------|------|
 | POST | /register | Inscription | Non |
-| POST | /login | Connexion | Non |
+| POST | /login | Connexion (+ security log) | Non |
+| POST | /google | OAuth Google | Non |
+| POST | /apple | OAuth Apple | Non |
 | POST | /refresh | Rafraichir tokens | Non |
-| POST | /logout | Deconnexion | Oui |
-| DELETE | /delete | Supprimer compte | Oui |
+| POST | /refresh-session | Refresh via cookie HttpOnly | Non |
 | GET | /me | Profil utilisateur | Oui |
+| PATCH | /me | Update profil | Oui |
+| POST | /change-password | Changer mot de passe | Oui |
+| POST | /change-email | Changer email | Oui |
+| POST | /logout | Deconnexion | Oui |
+| DELETE | /account | Supprimer compte (+ security log) | Oui |
 
 ### Projets (`/api/projects`) — Auth requise
 
@@ -221,10 +244,13 @@ db/
 | GET | /dashboard/overview | Stats globales |
 | GET | /dashboard/signups | Inscriptions par jour |
 | GET | /dashboard/visits | Pages vues par jour |
-| GET | /users | Liste utilisateurs |
-| PATCH | /users/:id/role | Changer role (super_admin) |
-| GET | /projects | Tous les projets |
+| GET | /users?q=&page=1&limit=50 | Liste utilisateurs (pagination) |
+| GET | /users/:id | Detail utilisateur + projets |
+| PATCH | /users/:id/role | Changer role (super_admin only, + security log) |
+| DELETE | /users/:id | Supprimer utilisateur (super_admin only, + security log) |
+| GET | /projects?status=&page=1&limit=50&archived=0|1 | Tous les projets (pagination, filtres) |
 | POST | /projects | Creer projet pour un user |
+| PATCH | /projects/:id | Modifier un projet (tous les attributs) |
 
 ### Support Tickets (`/api/support`) — Public
 
@@ -262,12 +288,20 @@ Interface d'administration server-rendered avec Hono JSX SSR, dans le meme Worke
 | GET | / | Overview: stats, graphiques, top endpoints | Admin |
 | GET | /logs | Request logs avec filtres et pagination | Admin |
 | GET | /errors | Erreurs: vue liste et groupee | Admin |
-| GET | /users | Liste utilisateurs, recherche | Admin |
-| GET | /users/:id | Detail utilisateur + projets + logs | Admin |
+| GET | /users | Liste utilisateurs, recherche, filtre role | Admin |
+| GET | /users/:id | Detail utilisateur + edition profil + projets + logs | Admin |
+| POST | /users/:id/edit | Modifier profil utilisateur | Admin (super_admin pour admins) |
 | POST | /users/:id/role | Changer role | Super Admin |
-| GET | /projects | Liste projets, filtre status | Admin |
-| GET | /projects/:id | Detail projet + tickets + fichiers | Admin |
-| GET | /database | SQL explorer: tables, structure | Super Admin |
+| GET | /users/:id/delete | Page de confirmation suppression | Super Admin |
+| POST | /users/:id/delete | Supprimer utilisateur (hard delete + R2 cleanup) | Super Admin |
+| GET | /projects | Liste projets actifs/archives, filtre status | Admin |
+| GET | /projects/:id | Detail projet + edition tous attributs + tickets + fichiers | Admin |
+| POST | /projects/:id/edit | Modifier projet (tous les champs) | Admin |
+| POST | /projects/:id/archive | Archiver projet | Admin |
+| POST | /projects/:id/restore | Restaurer projet archive | Admin |
+| GET | /database?tab=schema | Schema MPD visuel (SVG interactif) | Super Admin |
+| GET | /database?tab=tables | Tables explorer: structure, FK, index | Super Admin |
+| GET | /database?tab=query | Interface requete SQL | Super Admin |
 | POST | /database/query | Executer requete SQL | Super Admin |
 | GET | /docs | Documentation API + testeur integre | Admin |
 | GET | /config | Placeholder (bientot disponible) | Admin |
@@ -279,9 +313,10 @@ Interface d'administration server-rendered avec Hono JSX SSR, dans le meme Worke
 - Independant du systeme JWT de l'API
 
 **Middleware chain:**
-1. `loggerMiddleware` (toutes les requetes → D1 `request_logs`, fire-and-forget)
-2. `dashboardAuthMiddleware` (verifie le cookie, redirige vers /login si absent)
-3. `superAdminDashboardMiddleware` (uniquement pour /database, bloque si non super_admin)
+1. Security headers middleware (X-Content-Type-Options, X-Frame-Options, X-XSS-Protection, Referrer-Policy, Permissions-Policy)
+2. `loggerMiddleware` (toutes les requetes → D1 `request_logs`, fire-and-forget)
+3. `dashboardAuthMiddleware` (verifie le cookie, redirige vers /login si absent)
+4. `superAdminDashboardMiddleware` (uniquement pour /database, bloque si non super_admin)
 
 **Composants:**
 - `Layout` / `LoginLayout` — HTML shell avec sidebar
@@ -297,6 +332,14 @@ request_logs (id AUTOINCREMENT, method, path, status_code, duration_ms,
   IDX: created_at, path, status_code
 ```
 Purge automatique des logs > 30 jours a chaque visite de l'overview.
+
+**Table `security_events`:**
+```sql
+security_events (id AUTOINCREMENT, event_type, user_id?, target_user_id?,
+                 ip?, details?, created_at)
+  IDX: created_at, event_type, user_id
+```
+Event types: `login_failed`, `login_success`, `account_deleted`, `role_changed`, `password_changed`, `email_changed`, `admin_user_deleted`
 
 ## Flux d'authentification
 
@@ -321,6 +364,7 @@ Cela permet aux admins de consulter et gerer tous les projets depuis le dashboar
 
 | Mesure | Implementation |
 |--------|---------------|
+| Security Headers | X-Content-Type-Options: nosniff, X-Frame-Options: DENY, X-XSS-Protection, Referrer-Policy, Permissions-Policy |
 | Hachage MDP | PBKDF2-SHA-256, 50K iterations, salt 16 bytes |
 | Timing-safe | Comparaison XOR bit-a-bit (anti timing attack) |
 | Anti-enumeration | Message identique pour email/MDP incorrect |
@@ -331,6 +375,7 @@ Cela permet aux admins de consulter et gerer tous les projets depuis le dashboar
 | CORS | Limite a `raceup.com` + localhost en dev |
 | Upload validation | MIME type + taille verifie cote serveur (non-admin) |
 | IDs | UUID v4 non predictibles (`crypto.randomUUID()`) |
+| Security audit | Logging des login, suppressions, changements de role dans `security_events` |
 
 ## Format de reponse standardise
 
