@@ -12,6 +12,12 @@ API REST d'authentification pour **race-up.net**, deployee sur Cloudflare Worker
 
 ## Moniteur 
 
+Admin local:
+  Email    : admin@raceup.com
+  Password : Admin1234!
+  Username : superadmin
+  Role     : super_admin
+
 ### Local
 Pour acceder au Moniteur passer par se lien quand l'API est active : 
 http://localhost:8787/dashboard/login

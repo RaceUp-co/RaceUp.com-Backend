@@ -5,8 +5,11 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "db:init:local": "wrangler d1 execute raceup-db --local --file=./db/schema.sql",
-    "db:init:remote": "wrangler d1 execute raceup-db --remote --file=./db/schema.sql"
+    "db:init:local": "wrangler d1 execute RaceUp-User-Data --local --file=./db/schema.sql",
+    "db:init:remote": "wrangler d1 execute RaceUp-User-Data --remote --file=./db/schema.sql",
+    "db:migrate:local": "wrangler d1 execute RaceUp-User-Data --local --file=./db/migrations/002_request_logs.sql && wrangler d1 execute RaceUp-User-Data --local --file=./db/migrations/003_missing_tables_local.sql && wrangler d1 execute RaceUp-User-Data --local --file=./db/migrations/004-projects-columns.sql && wrangler d1 execute RaceUp-User-Data --local --file=./db/migrations/005-support-tickets.sql && wrangler d1 execute RaceUp-User-Data --local --file=./db/migrations/006-security-events.sql",
+    "db:seed:local": "node scripts/seed-local-admin.mjs",
+    "db:setup:local": "npm run db:init:local && npm run db:migrate:local && npm run db:seed:local"
   },
   "dependencies": {
     "hono": "^4.7.0",
