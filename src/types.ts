@@ -128,3 +128,61 @@ export type SupportTicket = {
   created_at: string;
   closed_at: string | null;
 };
+
+// ---------- Cookie consent types ----------
+
+export type ConsentCategories = {
+  necessary: true;
+  functional: boolean;
+  analytics: boolean;
+  marketing: boolean;
+};
+
+export type ConsentMethod = 'accept_all' | 'reject_all' | 'custom' | 'banner_dismiss';
+export type WithdrawReason = 'user_request' | 'policy_change' | 'expired';
+
+export type Consent = {
+  id: string;
+  consent_id: string;
+  user_id: string | null;
+  ip_hash: string;
+  user_agent: string | null;
+  country: string | null;
+
+  necessary: 1;
+  functional: 0 | 1;
+  analytics: 0 | 1;
+  marketing: 0 | 1;
+
+  policy_version: string;
+  consent_method: ConsentMethod;
+  source_url: string | null;
+
+  created_at: string;
+  expires_at: string;
+  withdrawn_at: string | null;
+  withdrawn_reason: WithdrawReason | null;
+};
+
+export type ConsentFilters = {
+  page?: number;
+  limit?: number;
+  policy_version?: string;
+  user_id?: string;
+  consent_method?: ConsentMethod;
+  date_from?: string;
+  date_to?: string;
+  status?: 'active' | 'withdrawn' | 'expired';
+};
+
+export type ConsentStats = {
+  total: number;
+  accept_all: number;
+  reject_all: number;
+  custom: number;
+  functional_accepted: number;
+  analytics_accepted: number;
+  marketing_accepted: number;
+  acceptance_rate: number;
+  period_days: number;
+};
