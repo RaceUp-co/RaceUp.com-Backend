@@ -18,6 +18,7 @@ ACCESS_TOKEN_EXPIRY = "900"
 REFRESH_TOKEN_EXPIRY = "604800"
 GOOGLE_CLIENT_ID = ""
 APPLE_CLIENT_ID = ""
+POLICY_VERSION = "v1.0.0"
 
 # Observabilité Cloudflare
 [observability]
