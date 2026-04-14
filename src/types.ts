@@ -9,6 +9,8 @@ export type Bindings = {
   REFRESH_TOKEN_EXPIRY: string;
   GOOGLE_CLIENT_ID: string;
   APPLE_CLIENT_ID: string;
+  CONSENT_SALT: string;
+  POLICY_VERSION: string;
 };
 
 export type Variables = {

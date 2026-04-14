@@ -5,6 +5,7 @@ import authRoutes from './routes/auth';
 import adminRoutes from './routes/admin';
 import projectRoutes from './routes/projects';
 import trackingRoutes from './routes/tracking';
+import consentRoutes from './routes/consent';
 import supportRoutes from './routes/support';
 import { loggerMiddleware } from './middleware/logger';
 import { dashboardAuthMiddleware } from './dashboard/session';
@@ -67,6 +68,7 @@ app.route('/api/auth', authRoutes);
 app.route('/api/admin', adminRoutes);
 app.route('/api/projects', projectRoutes);
 app.route('/api/track', trackingRoutes);
+app.route('/api/consent', consentRoutes);
 app.route('/api/support', supportRoutes);
 
 // Dashboard — public routes (login/logout)
