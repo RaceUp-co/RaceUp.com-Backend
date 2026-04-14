@@ -25,6 +25,15 @@ import {
 } from '../services/analytics';
 import { getUserById } from '../services/user';
 import { logSecurityEvent } from '../services/security';
+import {
+  listConsents,
+  getConsentById,
+  getConsentHistory,
+  getConsentStats,
+  withdrawConsent,
+  exportConsentsCsv,
+} from '../services/consent';
+import { consentFiltersSchema } from '../validators/consent';
 
 const admin = new Hono<AppType>();
 
@@ -470,5 +479,74 @@ async function db(database: D1Database, query: string, bindings: unknown[]) {
       : await stmt.all();
   return result.results;
 }
+
+/**
+ * GET /api/admin/consents — Liste paginee des consentements (filtres)
+ */
+admin.get('/consents', zValidator('query', consentFiltersSchema), async (c) => {
+  const filters = c.req.valid('query');
+  const result = await listConsents(c.env.DB, filters);
+  return c.json({ success: true, data: result });
+});
+
+/**
+ * GET /api/admin/consents/stats?days=30
+ */
+admin.get('/consents/stats', async (c) => {
+  const days = parseInt(c.req.query('days') ?? '30', 10);
+  const stats = await getConsentStats(c.env.DB, days);
+  return c.json({ success: true, data: stats });
+});
+
+/**
+ * GET /api/admin/consents/export?format=csv&...
+ */
+admin.get('/consents/export', zValidator('query', consentFiltersSchema), async (c) => {
+  const filters = c.req.valid('query');
+  const gen = exportConsentsCsv(c.env.DB, filters);
+  const stream = new ReadableStream({
+    async pull(controller) {
+      const { value, done } = await gen.next();
+      if (done) {
+        controller.close();
+      } else {
+        controller.enqueue(new TextEncoder().encode(value));
+      }
+    },
+  });
+  const filename = `consents-export-${new Date().toISOString().slice(0, 10)}.csv`;
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/csv; charset=utf-8',
+      'Content-Disposition': `attachment; filename="${filename}"`,
+    },
+  });
+});
+
+/**
+ * GET /api/admin/consents/:id — Detail + historique
+ */
+admin.get('/consents/:id', async (c) => {
+  const id = c.req.param('id');
+  const consent = await getConsentById(c.env.DB, id);
+  if (!consent) {
+    return c.json({ success: false, error: { code: 'NOT_FOUND', message: 'Consent not found' } }, 404);
+  }
+  const history = await getConsentHistory(c.env.DB, consent.consent_id);
+  return c.json({ success: true, data: { consent, history } });
+});
+
+/**
+ * POST /api/admin/consents/:id/withdraw — Admin force le retrait
+ */
+admin.post('/consents/:id/withdraw', async (c) => {
+  const id = c.req.param('id');
+  const consent = await getConsentById(c.env.DB, id);
+  if (!consent) {
+    return c.json({ success: false, error: { code: 'NOT_FOUND', message: 'Consent not found' } }, 404);
+  }
+  await withdrawConsent(c.env.DB, consent.consent_id, 'user_request');
+  return c.json({ success: true });
+});
 
 export default admin;
