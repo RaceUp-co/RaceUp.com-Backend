@@ -122,3 +122,167 @@ export function consentToCategoriesPayload(consent: Consent) {
     marketing: consent.marketing === 1,
   };
 }
+
+/**
+ * Marque un consent comme retire (RGPD : on ne supprime pas, on marque).
+ * On cree une nouvelle ligne marquee comme retrait pour garder l'historique.
+ */
+export async function withdrawConsent(
+  db: D1Database,
+  consentId: string,
+  reason: WithdrawReason = 'user_request'
+): Promise<void> {
+  const now = new Date().toISOString();
+  // On update TOUTES les lignes du meme consent_id pour marquer le retrait
+  await db.prepare(
+    `UPDATE cookie_consents
+     SET withdrawn_at = ?, withdrawn_reason = ?
+     WHERE consent_id = ? AND withdrawn_at IS NULL`
+  ).bind(now, reason, consentId).run();
+}
+
+/**
+ * Liste paginee avec filtres (pour dashboard admin).
+ */
+export async function listConsents(
+  db: D1Database,
+  filters: ConsentFilters
+): Promise<{ items: Consent[]; total: number; page: number; limit: number }> {
+  const page = filters.page ?? 1;
+  const limit = filters.limit ?? 50;
+  const offset = (page - 1) * limit;
+
+  const conditions: string[] = [];
+  const params: (string | number)[] = [];
+
+  if (filters.policy_version) {
+    conditions.push('policy_version = ?');
+    params.push(filters.policy_version);
+  }
+  if (filters.user_id) {
+    conditions.push('user_id = ?');
+    params.push(filters.user_id);
+  }
+  if (filters.consent_method) {
+    conditions.push('consent_method = ?');
+    params.push(filters.consent_method);
+  }
+  if (filters.date_from) {
+    conditions.push('created_at >= ?');
+    params.push(filters.date_from);
+  }
+  if (filters.date_to) {
+    conditions.push('created_at <= ?');
+    params.push(filters.date_to);
+  }
+  if (filters.status === 'active') {
+    conditions.push('withdrawn_at IS NULL AND expires_at > ?');
+    params.push(new Date().toISOString());
+  } else if (filters.status === 'withdrawn') {
+    conditions.push('withdrawn_at IS NOT NULL');
+  } else if (filters.status === 'expired') {
+    conditions.push('expires_at <= ?');
+    params.push(new Date().toISOString());
+  }
+
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+  const countResult = await db.prepare(
+    `SELECT COUNT(*) as cnt FROM cookie_consents ${where}`
+  ).bind(...params).first<{ cnt: number }>();
+  const total = countResult?.cnt ?? 0;
+
+  const items = await db.prepare(
+    `SELECT * FROM cookie_consents ${where}
+     ORDER BY created_at DESC
+     LIMIT ? OFFSET ?`
+  ).bind(...params, limit, offset).all<Consent>();
+
+  return { items: items.results ?? [], total, page, limit };
+}
+
+/**
+ * Statistiques agregees pour le dashboard.
+ */
+export async function getConsentStats(db: D1Database, days: number = 30): Promise<ConsentStats> {
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+
+  const result = await db.prepare(
+    `SELECT
+        COUNT(*) as total,
+        SUM(CASE WHEN consent_method = 'accept_all' THEN 1 ELSE 0 END) as accept_all,
+        SUM(CASE WHEN consent_method = 'reject_all' THEN 1 ELSE 0 END) as reject_all,
+        SUM(CASE WHEN consent_method = 'custom' THEN 1 ELSE 0 END) as custom,
+        SUM(functional) as functional_accepted,
+        SUM(analytics) as analytics_accepted,
+        SUM(marketing) as marketing_accepted
+     FROM cookie_consents
+     WHERE created_at >= ?
+       AND withdrawn_at IS NULL`
+  ).bind(since).first<{
+    total: number;
+    accept_all: number;
+    reject_all: number;
+    custom: number;
+    functional_accepted: number;
+    analytics_accepted: number;
+    marketing_accepted: number;
+  }>();
+
+  const total = result?.total ?? 0;
+  const accept_all = result?.accept_all ?? 0;
+
+  return {
+    total,
+    accept_all,
+    reject_all: result?.reject_all ?? 0,
+    custom: result?.custom ?? 0,
+    functional_accepted: result?.functional_accepted ?? 0,
+    analytics_accepted: result?.analytics_accepted ?? 0,
+    marketing_accepted: result?.marketing_accepted ?? 0,
+    acceptance_rate: total > 0 ? accept_all / total : 0,
+    period_days: days,
+  };
+}
+
+/**
+ * Generator async pour streamer un export CSV (evite timeout Worker).
+ */
+export async function* exportConsentsCsv(
+  db: D1Database,
+  filters: ConsentFilters
+): AsyncGenerator<string> {
+  // Header CSV
+  yield [
+    'id','consent_id','user_id','ip_hash','country','user_agent',
+    'necessary','functional','analytics','marketing',
+    'policy_version','consent_method','source_url',
+    'created_at','expires_at','withdrawn_at','withdrawn_reason'
+  ].join(',') + '\n';
+
+  const pageSize = 500;
+  let page = 1;
+  while (true) {
+    const { items } = await listConsents(db, { ...filters, page, limit: pageSize });
+    if (items.length === 0) break;
+
+    for (const c of items) {
+      const esc = (v: string | number | null) => {
+        if (v === null || v === undefined) return '';
+        const s = String(v);
+        return s.includes(',') || s.includes('"') || s.includes('\n')
+          ? `"${s.replace(/"/g, '""')}"`
+          : s;
+      };
+      yield [
+        c.id, c.consent_id, c.user_id, c.ip_hash, c.country, c.user_agent,
+        c.necessary, c.functional, c.analytics, c.marketing,
+        c.policy_version, c.consent_method, c.source_url,
+        c.created_at, c.expires_at, c.withdrawn_at, c.withdrawn_reason
+      ].map(esc).join(',') + '\n';
+    }
+
+    if (items.length < pageSize) break;
+    page++;
+  }
+}
