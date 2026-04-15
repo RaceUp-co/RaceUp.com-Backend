@@ -61,9 +61,10 @@ src/
 ├── types.ts                 Types TS : Bindings, Variables, AppType, User, Project, Ticket, etc.
 ├── routes/
 │   ├── auth.ts              Endpoints auth : register, login, refresh, logout, delete, me + security logging
-│   ├── admin.ts             Endpoints admin : dashboard, users (CRUD+delete), projects (CRUD+patch) + support tickets
+│   ├── admin.ts             Endpoints admin : dashboard, users (CRUD+delete), projects (CRUD+patch) + support tickets + consents
 │   ├── projects.ts          Endpoints projets : CRUD projets, tickets, fichiers (user auth)
 │   ├── support.ts           Endpoints support tickets : creation publique
+│   ├── consent.ts           Endpoints consent cookies (public) : POST /api/consent, status, policy, withdraw, my-consents
 │   └── tracking.ts          Endpoints tracking : page views (public)
 ├── dashboard/
 │   ├── styles.ts            CSS template string (dark theme monospace)
@@ -81,9 +82,12 @@ src/
 │       ├── errors.tsx       Erreurs: vue liste + groupee
 │       ├── users.tsx        Users: list, detail, edit profil, role change, delete with confirmation
 │       ├── projects.tsx     Projects: list (actifs+archives), detail, edit all fields, archive/restore
+│       ├── consent.tsx      Consentement: liste filtrable + KPIs, detail + historique, recherche, export CSV, withdraw admin
 │       ├── database.tsx     Schema MPD (SVG), tables explorer, SQL query (super_admin)
 │       ├── docs.tsx         API docs + testeur fetch()
 │       └── config.tsx       Placeholder
+├── utils/
+│   └── hash.ts              hashIP (SHA-256 + CONSENT_SALT) pour pseudonymiser les IPs dans cookie_consents
 ├── middleware/
 │   ├── auth.ts              Verification Bearer JWT, injection du payload dans le contexte
 │   ├── admin.ts             Verification role admin/super_admin
@@ -99,11 +103,13 @@ src/
 │   ├── support.ts           CRUD D1 : support_tickets (public, sans FK users)
 │   ├── security.ts          Security event logging → D1 security_events (fire-and-forget)
 │   ├── oauth.ts             OAuth Google/Apple
-│   └── cookies.ts           Gestion cookies refresh token
+│   ├── cookies.ts           Gestion cookies refresh token
+│   └── consent.ts           Logique metier consent : create, get, history, withdraw, list, stats, exportCsv (async gen)
 └── validators/
     ├── auth.ts              Schemas Zod pour auth
     ├── admin.ts             Schemas Zod pour admin
-    └── support.ts           Schemas Zod pour support tickets
+    ├── support.ts           Schemas Zod pour support tickets
+    └── consent.ts           Schemas Zod pour consent (create, withdraw, list filters)
 
 db/
 ├── schema.sql               Tables: users, refresh_tokens, projects, page_views
@@ -111,7 +117,8 @@ db/
     ├── 002_tickets_files.sql    Tables: tickets, ticket_messages, project_files + colonnes projects
     ├── 002_request_logs.sql     Table: request_logs + index (dashboard monitoring)
     ├── 005-support-tickets.sql  Table: support_tickets + index (system ticketing public)
-    └── 006-security-events.sql  Table: security_events + index (audit logging)
+    ├── 006-security-events.sql  Table: security_events + index (audit logging)
+    └── 007-cookie-consents.sql  Table: cookie_consents + index (registre RGPD des consentements)
 ```
 
 ## Schema de base de donnees
@@ -182,6 +189,31 @@ db/
 │ created_at TEXT                │
 └──────────────────────────────┘
   IDX: created_at, event_type, user_id
+
+┌──────────────────────────────┐
+│      cookie_consents          │   Registre RGPD immuable
+├──────────────────────────────┤
+│ id TEXT PK (UUID v4)           │
+│ consent_id TEXT                │   UUID stable stocke dans cookie raceup_consent
+│ user_id TEXT FK→users NULL     │   null si anonyme
+│ ip_hash TEXT                   │   SHA-256(ip + CONSENT_SALT)
+│ user_agent TEXT                │
+│ country TEXT                   │   CF-IPCountry
+│ necessary INTEGER              │   toujours 1
+│ functional INTEGER             │   0|1
+│ analytics INTEGER              │   0|1
+│ marketing INTEGER              │   0|1
+│ policy_version TEXT            │   vX.Y.Z
+│ consent_method TEXT            │   accept_all|reject_all|custom|banner_dismiss
+│ source_url TEXT                │
+│ created_at TEXT                │
+│ expires_at TEXT                │   created_at + 13 mois
+│ withdrawn_at TEXT              │   null tant que valide
+│ withdrawn_reason TEXT          │   user_request|policy_change|expired
+└──────────────────────────────┘
+  IDX: consent_id, user_id, created_at, policy_version
+
+Immutabilite : un changement = nouvelle ligne (meme consent_id). Retrait = UPDATE withdrawn_at, pas DELETE (preuve CNIL).
 ```
 
 ## Endpoints API
@@ -270,6 +302,26 @@ db/
 | GET | /support-tickets/:id | Detail d'un ticket |
 | PATCH | /support-tickets/:id | Fermer un ticket (`{ status: "closed" }`) |
 
+### Consent (`/api/consent`) — Public
+
+| Methode | Route | Description | Auth |
+|---------|-------|-------------|------|
+| POST | / | Enregistre un consentement (cree ligne dans `cookie_consents`, pose cookie) | Non |
+| GET | /status?consent_id=xxx | Verifie validite d'un `consent_id` (expire ? retire ? obsolete ?) | Non |
+| GET | /policy | Renvoie `POLICY_VERSION` courante et libelles des categories | Non |
+| POST | /withdraw | Retire un consentement (UPDATE `withdrawn_at`) | Non |
+| GET | /my-consents | Historique des consentements de l'utilisateur connecte | JWT |
+
+### Admin Consent (`/api/admin/consents`) — Auth + Admin requise
+
+| Methode | Route | Description |
+|---------|-------|-------------|
+| GET | / | Liste paginee avec filtres (status, category, date_from, date_to, q) |
+| GET | /stats?days=30 | Stats agregees (opt-in rate, par categorie, par methode) |
+| GET | /export?... | Export CSV streaming (ReadableStream, async generator) |
+| GET | /:id | Detail d'un consentement + historique des versions (meme consent_id) |
+| POST | /:id/withdraw | Retrait admin force (preuve CNIL) |
+
 ### Tracking (`/api/track`) — Public
 
 | Methode | Route | Description |
@@ -299,6 +351,11 @@ Interface d'administration server-rendered avec Hono JSX SSR, dans le meme Worke
 | POST | /projects/:id/edit | Modifier projet (tous les champs) | Admin |
 | POST | /projects/:id/archive | Archiver projet | Admin |
 | POST | /projects/:id/restore | Restaurer projet archive | Admin |
+| GET | /consent | Liste consentements paginee + KPIs + filtres (status, category, date, q) | Admin |
+| GET | /consent/search?q=... | Recherche AJAX (email/ip_hash/country) | Admin |
+| GET | /consent/export?... | Export CSV streaming des consentements filtres | Admin |
+| GET | /consent/:id | Detail consentement + historique des versions | Admin |
+| POST | /consent/:id/withdraw | Retrait admin force (preuve CNIL) | Admin |
 | GET | /database?tab=schema | Schema MPD visuel (SVG interactif) | Super Admin |
 | GET | /database?tab=tables | Tables explorer: structure, FK, index | Super Admin |
 | GET | /database?tab=query | Interface requete SQL | Super Admin |
@@ -405,3 +462,5 @@ Cela permet aux admins de consulter et gerer tous les projets depuis le dashboar
 | DB | D1 Database | Base de donnees principale |
 | R2 | R2 Bucket | Stockage fichiers projets |
 | JWT_SECRET | Secret | Cle de signature JWT |
+| CONSENT_SALT | Secret | Sel pour hash SHA-256 des IPs dans `cookie_consents` (min 32 chars aleatoires) |
+| POLICY_VERSION | Env var | Version courante de la politique cookies (ex: `v1.0.0`). Synchronisee avec `NEXT_PUBLIC_POLICY_VERSION` cote frontend |
