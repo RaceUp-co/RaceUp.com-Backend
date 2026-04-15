@@ -18,6 +18,7 @@ import projectsDashRoutes from './dashboard/routes/projects';
 import databaseRoutes from './dashboard/routes/database';
 import docsRoutes from './dashboard/routes/docs';
 import configRoutes from './dashboard/routes/config';
+import consentDashRoutes from './dashboard/routes/consent';
 
 const app = new Hono<AppType>();
 
@@ -86,6 +87,7 @@ app.route('/dashboard', projectsDashRoutes);
 app.route('/dashboard', databaseRoutes);
 app.route('/dashboard', docsRoutes);
 app.route('/dashboard', configRoutes);
+app.route('/', consentDashRoutes);
 
 // Global error handler
 app.onError((err, c) => {
