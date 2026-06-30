@@ -351,9 +351,11 @@ Interface d'administration server-rendered avec Hono JSX SSR, dans le meme Worke
 | POST | /projects/:id/edit | Modifier projet (tous les champs) | Admin |
 | POST | /projects/:id/archive | Archiver projet | Admin |
 | POST | /projects/:id/restore | Restaurer projet archive | Admin |
-| GET | /consent | Liste consentements paginee + KPIs + filtres (status, category, date, q) | Admin |
-| GET | /consent/search?q=... | Recherche AJAX (email/ip_hash/country) | Admin |
+| GET | /consent | Liste paginee + KPIs + graphiques (serie temporelle, top pays, categories %) + repartitions (actifs/retires/expires) + filtres (status, method, policy, country, dates) | Admin |
+| GET | /consent/search?consent_id=... | Recherche par consent_id (historique des versions) | Admin |
 | GET | /consent/export?... | Export CSV streaming des consentements filtres | Admin |
+| GET | /consent/export-json?... | Export JSON streaming (usage interne / audit RGPD) | Admin |
+| GET | /consent/register | Registre RGPD presentable (synthese de conformite, prete pour controle CNIL) | Admin |
 | GET | /consent/:id | Detail consentement + historique des versions | Admin |
 | POST | /consent/:id/withdraw | Retrait admin force (preuve CNIL) | Admin |
 | GET | /database?tab=schema | Schema MPD visuel (SVG interactif) | Super Admin |
@@ -397,6 +399,36 @@ security_events (id AUTOINCREMENT, event_type, user_id?, target_user_id?,
   IDX: created_at, event_type, user_id
 ```
 Event types: `login_failed`, `login_success`, `account_deleted`, `role_changed`, `password_changed`, `email_changed`, `admin_user_deleted`
+
+## Mode maintenance
+
+Permet de basculer le site public (`raceup.com`) en page d'indisponibilite depuis le dashboard,
+tout en gardant l'acces aux comptes `admin` / `super_admin`.
+
+**Table `maintenance_state`** (mono-ligne, `id = 1`) :
+```sql
+maintenance_state (id PK CHECK(id=1), is_enabled[0|1], starts_at?, ends_at?,
+                   message?, updated_at?, updated_by?)
+```
+- `is_enabled` : interrupteur maitre.
+- `starts_at` / `ends_at` : fenetre optionnelle (format `datetime-local`/ISO). Permet la
+  programmation (debut futur) et l'auto-extinction (fin passee).
+- **Etat effectif** (`isMaintenanceActive`) = `is_enabled=1` ET (pas de debut OU debut passe)
+  ET (pas de fin OU fin pas encore atteinte).
+- Service : `src/services/maintenance.ts` (`getMaintenanceState`, `isMaintenanceActive`,
+  `buildMaintenanceStatus`, `setMaintenanceState`).
+
+**Endpoint public** `GET /api/maintenance` → `{ success, data: { active, is_enabled, starts_at, ends_at, message } }`.
+Toujours 200 ; le front fail-open (statut inactif) sur erreur reseau.
+
+**Dashboard** `GET /dashboard/config` (formulaire) + `POST /dashboard/config/maintenance`
+(interrupteur, dates debut/fin, message, validation `fin > debut`). Protege par
+`dashboardAuthMiddleware` (admin/super_admin).
+
+**Cote front** : `MaintenanceGate` (client) monte dans `[lang]/layout.tsx` interroge l'endpoint,
+laisse passer les admins (via `refreshTokens()`) et les routes `login`/`register`, sinon affiche
+l'ecran d'indisponibilite. Si `ends_at` est defini, l'ecran indique la date de retour ; sinon
+« duree indeterminee ».
 
 ## Flux d'authentification
 
