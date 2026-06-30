@@ -1,41 +1,39 @@
-# RaceUp.com-Backend
+# RaceUp.com-Backend — API
 
-API REST d'authentification pour **race-up.net**, deployee sur Cloudflare Workers + D1.
+API REST de **[raceup.com](https://raceup.com)**, déployée sur Cloudflare Workers.
+Gère l'authentification, les projets clients, les tickets, les fichiers, la conformité RGPD et le monitoring.
+
+Pour la carte technique complète (routes, schéma BDD, patterns), voir [claude.md](claude.md) et [docs/architecture.md](docs/architecture.md).
 
 ## Stack
 
-- **Cloudflare Workers** — Runtime edge (TypeScript)
-- **Hono** — Framework web ultra-leger
-- **Cloudflare D1** — Base de donnees SQLite managee
-- **Zod** — Validation des entrees
-- **Web Crypto API** — Hachage PBKDF2 + JWT natifs
+- **Cloudflare Workers** — runtime edge (TypeScript)
+- **Hono** — framework web ultra-léger (+ JSX SSR pour le Moniteur)
+- **Cloudflare D1** — base de données SQLite managée
+- **Cloudflare R2** — stockage objet (fichiers de projets)
+- **Zod** — validation des entrées
+- **Web Crypto API** — JWT, hachage PBKDF2 (mots de passe) et SHA-256 (IP RGPD), natifs
 
-## Moniteur 
+## Moniteur (dashboard admin)
 
-Admin local:
+Interface d'administration SSR (stats, utilisateurs, projets, logs, erreurs, base de données, consentements).
+
+```
+Admin local :
   Email    : admin@raceup.com
   Password : Admin1234!
-  Username : superadmin
-  Role     : super_admin
+  Rôle     : super_admin
+```
 
-### Local
-Pour acceder au Moniteur passer par se lien quand l'API est active : 
-http://localhost:8787/dashboard/login
+- **Local** : http://localhost:8787/dashboard/login (API démarrée)
+- **Production** : https://raceup-backend-api.jacqueslucas-m2101.workers.dev/dashboard/login
 
-L'API utilise la DB et le bucket R2 de production même lorsqu'on accede a l'API en local alos précaution lors de son utilisation
+> ⚠️ Selon la configuration Wrangler, `wrangler dev` peut accéder à la **D1 et au bucket R2 de production**. Vérifie l'environnement avant toute opération destructive.
 
-### Production 
+## Prérequis
 
-Le moniteur est aussi fonctionnel en production a l'adresse suivante : 
-https://raceup-backend-api.jacqueslucas-m2101.workers.dev/dashboard/login
-
-
-## Prerequis
-
-- Node.js >= 18
-- npm
-- Un compte Cloudflare (gratuit)
-- Wrangler CLI (installe en devDependency)
+- Node.js ≥ 18 et npm
+- Un compte Cloudflare (gratuit) — Wrangler est installé en devDependency
 
 ## Installation
 
@@ -45,147 +43,121 @@ cd RaceUp.com-Backend
 npm install
 ```
 
-## Developpement local
-
-### 1. Initialiser la base de donnees locale
+## Développement local
 
 ```bash
-npm run db:init:local
-```
+# 1. Base de données locale : init + migrations + admin de test
+npm run db:setup:local
 
-### 2. Lancer le serveur de dev
+# 2. Secret local : créer .dev.vars (non commité)
+#    JWT_SECRET=dev-secret-change-me-minimum-32-chars
+#    CONSENT_SALT=dev-salt-change-me
 
-```bash
+# 3. Lancer le serveur (http://localhost:8787)
 npm run dev
 ```
 
-Le serveur demarre sur `http://localhost:8787`.
+## Endpoints (vue d'ensemble)
 
-Les secrets locaux sont lus depuis `.dev.vars` (non commite). Le fichier contient :
+Format de réponse uniforme : `{ "success": true, "data": {...} }` ou `{ "success": false, "error": { "code", "message" } }`.
 
-```
-JWT_SECRET=dev-secret-change-me-in-production-minimum-32-chars
-```
+| Préfixe | Auth | Description |
+|---------|------|-------------|
+| `GET /api/health` | — | Health check |
+| `/api/auth/*` | mixte | Inscription, connexion, OAuth Google/Apple, refresh, profil, logout, suppression |
+| `/api/projects/*` | JWT | CRUD projets + tickets + fichiers (R2) |
+| `/api/admin/*` | JWT + admin | Stats dashboard, gestion users/projets, tickets support |
+| `/api/support` | — | Création d'un ticket de support (public) |
+| `/api/consent/*` | mixte | Consentement cookies RGPD (preuve, statut, retrait, droit d'accès) |
+| `/api/track/pageview` | — | Enregistrement d'une page vue |
+| `/dashboard/*` | Cookie HMAC | Moniteur admin (SSR) |
 
-## Endpoints
+> Liste exhaustive des routes, payloads et codes d'erreur : [claude.md](claude.md#routes-api).
 
-| Methode | Route | Auth | Description |
-|---------|-------|------|-------------|
-| `GET` | `/api/health` | Non | Health check |
-| `POST` | `/api/auth/register` | Non | Inscription |
-| `POST` | `/api/auth/login` | Non | Connexion |
-| `POST` | `/api/auth/refresh` | Non | Renouvellement des tokens |
-| `POST` | `/api/auth/logout` | Bearer JWT | Deconnexion (revoque les refresh tokens) |
-| `DELETE` | `/api/auth/account` | Bearer JWT | Suppression du compte |
+### Exemples (curl)
 
-### Exemples
-
-**Inscription :**
 ```bash
+# Inscription
 curl -X POST http://localhost:8787/api/auth/register \
   -H "Content-Type: application/json" \
-  -d '{"email": "dev@raceup.com", "password": "MonTest123"}'
-```
+  -d '{"email":"dev@raceup.com","password":"MonTest123","username":"dev","first_name":"Dev","last_name":"Test"}'
 
-**Connexion :**
-```bash
+# Connexion
 curl -X POST http://localhost:8787/api/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"email": "dev@raceup.com", "password": "MonTest123"}'
-```
+  -d '{"email":"dev@raceup.com","password":"MonTest123"}'
 
-**Refresh token :**
-```bash
-curl -X POST http://localhost:8787/api/auth/refresh \
-  -H "Content-Type: application/json" \
-  -d '{"refresh_token": "<REFRESH_TOKEN>"}'
-```
-
-**Logout (route protegee) :**
-```bash
-curl -X POST http://localhost:8787/api/auth/logout \
+# Route protégée (profil courant)
+curl http://localhost:8787/api/auth/me \
   -H "Authorization: Bearer <ACCESS_TOKEN>"
 ```
 
-**Suppression de compte (route protegee) :**
-```bash
-curl -X DELETE http://localhost:8787/api/auth/account \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <ACCESS_TOKEN>" \
-  -d '{"password": "MonTest123"}'
-```
-
-### Format de reponse
-
-Toutes les reponses suivent ce format :
-
-```json
-// Succes
-{ "success": true, "data": { ... } }
-
-// Erreur
-{ "success": false, "error": { "code": "ERROR_CODE", "message": "..." } }
-```
-
-## Deploiement en production
-
-### 1. Creer la base D1
+## Déploiement en production
 
 ```bash
-npx wrangler d1 create raceup-db
-```
+# 1. Créer la base D1 et reporter le database_id dans wrangler.toml
+npx wrangler d1 create RaceUp-User-Data
 
-Reporter le `database_id` affiche dans `wrangler.toml`.
+# 2. Créer le bucket R2
+npx wrangler r2 bucket create raceup-project-files
 
-### 2. Configurer le secret JWT
-
-```bash
+# 3. Configurer les secrets (≥ 32 caractères aléatoires)
 npx wrangler secret put JWT_SECRET
-```
+npx wrangler secret put CONSENT_SALT
 
-Utiliser une cle aleatoire d'au moins 32 caracteres.
-
-### 3. Initialiser la base distante
-
-```bash
+# 4. Initialiser le schéma distant
 npm run db:init:remote
-```
 
-### 4. Deployer
-
-```bash
+# 5. Déployer
 npm run deploy
 ```
 
 ## Scripts disponibles
 
-| Script | Commande | Description |
-|--------|----------|-------------|
-| `npm run dev` | `wrangler dev` | Serveur de dev local |
-| `npm run deploy` | `wrangler deploy` | Deploiement production |
-| `npm run db:init:local` | `wrangler d1 execute --local` | Init BDD locale |
-| `npm run db:init:remote` | `wrangler d1 execute --remote` | Init BDD production |
+| Script | Description |
+|--------|-------------|
+| `npm run dev` | Serveur de dev local (`wrangler dev`, port 8787) |
+| `npm run deploy` | Déploiement production (`wrangler deploy`) |
+| `npm run db:init:local` / `db:init:remote` | Crée le schéma (local / production) |
+| `npm run db:migrate:local` | Applique les migrations (002 → 007) en local |
+| `npm run db:seed:local` | Crée l'admin de test local |
+| `npm run db:setup:local` | Init + migrations + seed en une commande |
 
 ## Structure du projet
 
 ```
 src/
-├── index.ts              Point d'entree, CORS, error handlers
-├── types.ts              Types TypeScript
-├── routes/auth.ts        Endpoints d'authentification
-├── middleware/auth.ts     Middleware verification JWT
-├── services/
-│   ├── password.ts       Hachage PBKDF2 (Web Crypto API)
-│   ├── token.ts          Generation JWT + refresh tokens
-│   └── user.ts           CRUD utilisateur (D1)
-└── validators/auth.ts    Schemas de validation Zod
+├── index.ts          Point d'entrée : security headers, CORS, montage des routes, erreurs
+├── types.ts          Bindings, Variables et modèles TypeScript
+├── routes/           Endpoints API : auth, projects, admin, support, consent, tracking
+├── dashboard/        Moniteur admin SSR (layout, components, routes, session HMAC)
+├── middleware/       auth (JWT), admin (rôles), logger (request_logs)
+├── services/         Logique métier : password, token, user, project, ticket, file (R2),
+│                     analytics, security, oauth, cookies, support, consent
+├── validators/       Schémas Zod (auth, admin, support, consent)
+└── utils/            hash.ts (SHA-256 + sel pour les IP, RGPD)
 
-db/schema.sql             Schema SQLite (tables + index)
-docs/architecture.md      Documentation technique detaillee
-docs/TODO.md              Roadmap et taches restantes
+db/
+├── schema.sql        Tables initiales
+└── migrations/       Évolutions du schéma (appliquées via wrangler d1 execute)
+docs/
+├── architecture.md   Documentation technique détaillée (source de vérité)
+└── TODO.md           Roadmap
 ```
+
+## Sécurité
+
+- **Mots de passe** : PBKDF2-SHA-256 (50 000 itérations, sel 16 octets, vérification timing-safe)
+- **Tokens** : access JWT HS256 (15 min) + refresh opaque 64 octets (7 j, rotation à chaque refresh, stocké haché)
+- **RGPD** : IP jamais stockée en clair (hachée SHA-256 + `CONSENT_SALT`), consentement à preuve immuable
+- **Admin** : tous les endpoints sensibles vérifient le rôle côté serveur + journalisation des événements de sécurité
 
 ## Documentation
 
-- [Architecture detaillee](docs/architecture.md) — Stack, flux d'auth, securite, schema BDD
-- [TODO / Roadmap](docs/TODO.md) — Taches restantes et prochaines etapes
+- [claude.md](claude.md) — Carte technique complète (routes, schéma D1, patterns)
+- [docs/architecture.md](docs/architecture.md) — Référence détaillée
+- [docs/TODO.md](docs/TODO.md) — Roadmap
+
+---
+
+© 2026 RaceUp. Tous droits réservés.
