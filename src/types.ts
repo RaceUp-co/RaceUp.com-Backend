@@ -117,6 +117,27 @@ export type DashboardSession = {
   exp: number;
 };
 
+// ---------- Maintenance ----------
+
+export type MaintenanceState = {
+  id: number;
+  is_enabled: number; // 0 | 1 (stocke en INTEGER SQLite)
+  starts_at: string | null;
+  ends_at: string | null;
+  message: string | null;
+  updated_at: string | null;
+  updated_by: string | null;
+};
+
+// Statut effectif expose au front
+export type MaintenanceStatus = {
+  active: boolean;
+  is_enabled: boolean;
+  starts_at: string | null;
+  ends_at: string | null;
+  message: string | null;
+};
+
 export type SupportTicket = {
   id: string;
   email: string;
@@ -172,6 +193,7 @@ export type ConsentFilters = {
   policy_version?: string;
   user_id?: string;
   consent_method?: ConsentMethod;
+  country?: string;
   date_from?: string;
   date_to?: string;
   status?: 'active' | 'withdrawn' | 'expired';
@@ -187,4 +209,24 @@ export type ConsentStats = {
   marketing_accepted: number;
   acceptance_rate: number;
   period_days: number;
+};
+
+// Un point de la série temporelle (consentements par jour, ventilés par méthode).
+export type ConsentTimePoint = {
+  day: string; // YYYY-MM-DD
+  total: number;
+  accept_all: number;
+  reject_all: number;
+  custom: number;
+};
+
+// Répartitions agrégées pour le dashboard (pays, policy, retraits/expirations).
+export type ConsentBreakdown = {
+  by_country: { label: string; value: number }[];
+  by_policy: { label: string; value: number }[];
+  total: number;
+  withdrawn: number;
+  expired: number;
+  active: number;
+  withdrawal_rate: number; // [0..1]
 };

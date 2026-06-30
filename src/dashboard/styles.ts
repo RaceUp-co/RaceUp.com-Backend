@@ -65,6 +65,8 @@ export const dashboardCSS = `
   /* Charts */
   .chart-container { background: #1a1a2e; border: 1px solid #2a2a4a; border-radius: 4px; padding: 16px; margin-bottom: 20px; }
   .chart-title { font-size: 12px; color: #707090; text-transform: uppercase; margin-bottom: 12px; }
+  .charts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+  .charts-grid .chart-container { margin-bottom: 0; }
 
   /* Section title */
   .section-title { font-size: 14px; color: #fff; margin: 20px 0 10px; }
