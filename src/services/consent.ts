@@ -1,4 +1,4 @@
-import type { Consent, ConsentCategories, ConsentMethod, ConsentFilters, ConsentStats, WithdrawReason } from '../types';
+import type { Consent, ConsentCategories, ConsentMethod, ConsentFilters, ConsentStats, ConsentTimePoint, ConsentBreakdown, WithdrawReason } from '../types';
 import type { ConsentInput } from '../validators/consent';
 import { hashIP } from '../utils/hash';
 
@@ -167,6 +167,10 @@ export async function listConsents(
     conditions.push('consent_method = ?');
     params.push(filters.consent_method);
   }
+  if (filters.country) {
+    conditions.push('country = ?');
+    params.push(filters.country);
+  }
   if (filters.date_from) {
     conditions.push('created_at >= ?');
     params.push(filters.date_from);
@@ -246,6 +250,74 @@ export async function getConsentStats(db: D1Database, days: number = 30): Promis
 }
 
 /**
+ * Serie temporelle : consentements par jour ventiles par methode (pour graphiques).
+ */
+export async function getConsentTimeSeries(db: D1Database, days: number = 30): Promise<ConsentTimePoint[]> {
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+  const result = await db.prepare(
+    `SELECT
+        substr(created_at, 1, 10) as day,
+        COUNT(*) as total,
+        SUM(CASE WHEN consent_method = 'accept_all' THEN 1 ELSE 0 END) as accept_all,
+        SUM(CASE WHEN consent_method = 'reject_all' THEN 1 ELSE 0 END) as reject_all,
+        SUM(CASE WHEN consent_method = 'custom' THEN 1 ELSE 0 END) as custom
+     FROM cookie_consents
+     WHERE created_at >= ?
+     GROUP BY day
+     ORDER BY day ASC`
+  ).bind(since).all<ConsentTimePoint>();
+  return result.results ?? [];
+}
+
+/**
+ * Repartitions agregees : par pays, par version de politique, et taux de retrait/expiration.
+ */
+export async function getConsentBreakdown(db: D1Database, days: number = 30): Promise<ConsentBreakdown> {
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+  const now = new Date().toISOString();
+
+  const [countryRes, policyRes, statusRes] = await Promise.all([
+    db.prepare(
+      `SELECT COALESCE(country, '??') as label, COUNT(*) as value
+       FROM cookie_consents
+       WHERE created_at >= ?
+       GROUP BY country
+       ORDER BY value DESC
+       LIMIT 15`
+    ).bind(since).all<{ label: string; value: number }>(),
+    db.prepare(
+      `SELECT policy_version as label, COUNT(*) as value
+       FROM cookie_consents
+       WHERE created_at >= ?
+       GROUP BY policy_version
+       ORDER BY value DESC`
+    ).bind(since).all<{ label: string; value: number }>(),
+    db.prepare(
+      `SELECT
+          COUNT(*) as total,
+          SUM(CASE WHEN withdrawn_at IS NOT NULL THEN 1 ELSE 0 END) as withdrawn,
+          SUM(CASE WHEN withdrawn_at IS NULL AND expires_at <= ? THEN 1 ELSE 0 END) as expired,
+          SUM(CASE WHEN withdrawn_at IS NULL AND expires_at > ? THEN 1 ELSE 0 END) as active
+       FROM cookie_consents
+       WHERE created_at >= ?`
+    ).bind(now, now, since).first<{ total: number; withdrawn: number; expired: number; active: number }>(),
+  ]);
+
+  const total = statusRes?.total ?? 0;
+  const withdrawn = statusRes?.withdrawn ?? 0;
+
+  return {
+    by_country: countryRes.results ?? [],
+    by_policy: policyRes.results ?? [],
+    total,
+    withdrawn,
+    expired: statusRes?.expired ?? 0,
+    active: statusRes?.active ?? 0,
+    withdrawal_rate: total > 0 ? withdrawn / total : 0,
+  };
+}
+
+/**
  * Generator async pour streamer un export CSV (evite timeout Worker).
  */
 export async function* exportConsentsCsv(
@@ -285,4 +357,31 @@ export async function* exportConsentsCsv(
     if (items.length < pageSize) break;
     page++;
   }
+}
+
+/**
+ * Generator async pour streamer un export JSON (tableau d'objets, pagine).
+ * Usage interne / audit RGPD uniquement — jamais destine a une diffusion tierce.
+ */
+export async function* exportConsentsJson(
+  db: D1Database,
+  filters: ConsentFilters
+): AsyncGenerator<string> {
+  yield '[';
+  const pageSize = 500;
+  let page = 1;
+  let first = true;
+  while (true) {
+    const { items } = await listConsents(db, { ...filters, page, limit: pageSize });
+    if (items.length === 0) break;
+
+    for (const c of items) {
+      yield (first ? '' : ',') + JSON.stringify(c);
+      first = false;
+    }
+
+    if (items.length < pageSize) break;
+    page++;
+  }
+  yield ']';
 }

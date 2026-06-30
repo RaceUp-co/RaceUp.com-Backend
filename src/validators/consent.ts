@@ -29,6 +29,7 @@ export const consentFiltersSchema = z.object({
   policy_version: z.string().optional(),
   user_id: z.string().optional(),
   consent_method: z.enum(['accept_all', 'reject_all', 'custom', 'banner_dismiss']).optional(),
+  country: z.string().length(2).optional(),
   date_from: z.string().optional(),
   date_to: z.string().optional(),
   status: z.enum(['active', 'withdrawn', 'expired']).optional(),
