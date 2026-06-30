@@ -23,6 +23,12 @@ Ce fichier est ta **carte**. Sers-t'en pour aller droit au but au lieu d'explore
 - Commenter brievement tout bloc complexe
 - Migrations SQL dans `db/migrations/`, appliquees via Wrangler
 
+## Conventions de commit (IMPORTANT)
+
+- **Commits groupés par thème** : ne jamais tout committer en un seul bloc. Découper en plusieurs commits atomiques, **un par thème fonctionnel** (ex : un commit pour une route + son validator + sa doc, un autre pour une migration, un autre pour le dashboard…). Même sur un gros changeset, séparer par sujet.
+- **Format conventionnel** : préfixer le message — `feat:` (fonctionnalité), `fix:` (correctif), `refactor:`, `docs:`, `style:`, `chore:`, `perf:`, `test:`.
+- **Jamais de co-auteur** : message simple et conventionnel, **sans** ligne `Co-Authored-By` ni mention d'un outil/IA.
+
 ## Stack
 
 - Hono 4.7+, Zod 3.24+ (@hono/zod-validator), TypeScript 5.7+
