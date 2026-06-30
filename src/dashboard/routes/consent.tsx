@@ -4,13 +4,17 @@ import type { AppType, Consent, ConsentFilters } from '../../types';
 import { Layout } from '../layout';
 import { DataTable, Pagination } from '../components/table';
 import { StatCard } from '../components/stat-card';
+import { BarChart } from '../components/chart';
 import {
   listConsents,
   getConsentStats,
+  getConsentTimeSeries,
+  getConsentBreakdown,
   getConsentById,
   getConsentHistory,
   withdrawConsent,
   exportConsentsCsv,
+  exportConsentsJson,
 } from '../../services/consent';
 
 const routes = new Hono<AppType>();
@@ -67,6 +71,7 @@ const ConsentFiltersForm: FC<{ filters: ConsentFilters }> = ({ filters }) => (
       <option value="expired" selected={filters.status === 'expired'}>Expiré</option>
     </select>
     <input type="text" name="policy_version" placeholder="Policy version" value={filters.policy_version || ''} />
+    <input type="text" name="country" placeholder="Pays (FR)" maxlength={2} value={filters.country || ''} />
     <button type="submit">Filtrer</button>
   </form>
 );
@@ -82,17 +87,28 @@ routes.get('/dashboard/consent', async (c) => {
     limit: 50,
     policy_version: query.policy_version || undefined,
     consent_method: (query.method as ConsentFilters['consent_method']) || undefined,
+    country: query.country ? query.country.toUpperCase() : undefined,
     date_from: query.date_from || undefined,
     date_to: query.date_to || undefined,
     status: (query.status as ConsentFilters['status']) || undefined,
   };
 
-  const [stats, list] = await Promise.all([
+  const [stats, list, series, breakdown] = await Promise.all([
     getConsentStats(c.env.DB, 30),
     listConsents(c.env.DB, filters),
+    getConsentTimeSeries(c.env.DB, 30),
+    getConsentBreakdown(c.env.DB, 30),
   ]);
 
   const queryParams = new URLSearchParams(query as Record<string, string>).toString();
+
+  // Taux d'acceptation (%) par catégorie sur la période.
+  const pct = (n: number) => (stats.total > 0 ? Math.round((n / stats.total) * 100) : 0);
+  const catData = [
+    { label: 'Functional', value: pct(stats.functional_accepted) },
+    { label: 'Analytics', value: pct(stats.analytics_accepted) },
+    { label: 'Marketing', value: pct(stats.marketing_accepted) },
+  ];
 
   return c.html(
     <Layout title="Consentement" currentPath="/dashboard/consent" role={session.role}>
@@ -104,16 +120,39 @@ routes.get('/dashboard/consent', async (c) => {
       </div>
 
       <div class="stats-grid">
-        <StatCard label="Functional accept" value={stats.functional_accepted} />
-        <StatCard label="Analytics accept" value={stats.analytics_accepted} />
-        <StatCard label="Marketing accept" value={stats.marketing_accepted} />
+        <StatCard label="Actifs" value={breakdown.active} />
+        <StatCard label="Retirés" value={breakdown.withdrawn} />
+        <StatCard label="Expirés" value={breakdown.expired} />
+        <StatCard label="Taux de retrait" value={`${Math.round(breakdown.withdrawal_rate * 100)}%`} />
       </div>
+
+      <div class="charts-grid">
+        <BarChart title="Consentements / jour (30j)" data={series.map((p) => ({ label: p.day.slice(5), value: p.total }))} />
+        <BarChart title="Accept all / jour (30j)" data={series.map((p) => ({ label: p.day.slice(5), value: p.accept_all }))} color="#3fb950" />
+      </div>
+
+      <div class="charts-grid">
+        <BarChart title="Acceptation par catégorie (%)" data={catData} color="#a371f7" />
+        <BarChart title="Top pays (30j)" data={breakdown.by_country} color="#f0883e" />
+      </div>
+
+      {breakdown.by_policy.length > 1 && (
+        <div class="charts-grid">
+          <BarChart title="Répartition par version de politique" data={breakdown.by_policy} color="#6e7681" />
+        </div>
+      )}
 
       <ConsentFiltersForm filters={filters} />
 
       <div class="toolbar">
         <a class="btn" href={`/dashboard/consent/export?${queryParams}`}>
           Exporter CSV
+        </a>
+        <a class="btn" href={`/dashboard/consent/export-json?${queryParams}`}>
+          Exporter JSON
+        </a>
+        <a class="btn" href="/dashboard/consent/register">
+          Registre RGPD
         </a>
         <form method="get" action="/dashboard/consent/search" class="inline-form">
           <input type="text" name="consent_id" placeholder="Rechercher par consent_id" />
@@ -192,6 +231,7 @@ routes.get('/dashboard/consent/export', async (c) => {
   const filters: ConsentFilters = {
     policy_version: query.policy_version || undefined,
     consent_method: (query.method as ConsentFilters['consent_method']) || undefined,
+    country: query.country ? query.country.toUpperCase() : undefined,
     date_from: query.date_from || undefined,
     date_to: query.date_to || undefined,
     status: (query.status as ConsentFilters['status']) || undefined,
@@ -213,6 +253,117 @@ routes.get('/dashboard/consent/export', async (c) => {
       'Content-Disposition': `attachment; filename="${filename}"`,
     },
   });
+});
+
+/**
+ * GET /dashboard/consent/export-json
+ * Export JSON streaming (usage interne / audit RGPD), memes filtres que la liste.
+ */
+routes.get('/dashboard/consent/export-json', async (c) => {
+  const query = c.req.query();
+  const filters: ConsentFilters = {
+    policy_version: query.policy_version || undefined,
+    consent_method: (query.method as ConsentFilters['consent_method']) || undefined,
+    country: query.country ? query.country.toUpperCase() : undefined,
+    date_from: query.date_from || undefined,
+    date_to: query.date_to || undefined,
+    status: (query.status as ConsentFilters['status']) || undefined,
+  };
+
+  const gen = exportConsentsJson(c.env.DB, filters);
+  const stream = new ReadableStream({
+    async pull(controller) {
+      const { value, done } = await gen.next();
+      if (done) controller.close();
+      else controller.enqueue(new TextEncoder().encode(value));
+    },
+  });
+
+  const filename = `consents-${new Date().toISOString().slice(0, 10)}.json`;
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Content-Disposition': `attachment; filename="${filename}"`,
+    },
+  });
+});
+
+/**
+ * GET /dashboard/consent/register
+ * Registre RGPD presentable : synthese de conformite prete a montrer en cas de controle CNIL.
+ */
+routes.get('/dashboard/consent/register', async (c) => {
+  const session = c.get('dashboardSession');
+  const [stats, breakdown] = await Promise.all([
+    getConsentStats(c.env.DB, 3650), // ~10 ans : on couvre tout l'historique conserve
+    getConsentBreakdown(c.env.DB, 3650),
+  ]);
+
+  const policyVersion = c.env.POLICY_VERSION ?? 'n/c';
+  const generatedAt = new Date().toISOString().slice(0, 16).replace('T', ' ');
+  const pct = (n: number) => (stats.total > 0 ? Math.round((n / stats.total) * 100) : 0);
+
+  return c.html(
+    <Layout title="Registre RGPD" currentPath="/dashboard/consent" role={session.role}>
+      <p><a href="/dashboard/consent">← Retour</a></p>
+
+      <section class="panel">
+        <h2>Registre des consentements — RaceUp.com</h2>
+        <p>Document de conformité généré le {generatedAt} (UTC). Source : table immuable <code>cookie_consents</code>.</p>
+        <dl>
+          <dt>Responsable de traitement</dt><dd>RaceUp</dd>
+          <dt>Finalité</dt><dd>Preuve de consentement aux cookies (art. 7 RGPD, recommandation CNIL)</dd>
+          <dt>Base légale</dt><dd>Consentement de la personne concernée</dd>
+          <dt>Version de politique en vigueur</dt><dd>{policyVersion}</dd>
+          <dt>Durée de conservation</dt><dd>~13 mois (renouvellement du consentement à l'échéance)</dd>
+          <dt>Minimisation</dt><dd>IP jamais stockée en clair (hash SHA-256 + sel). Aucune donnée directement identifiante.</dd>
+          <dt>Droit de retrait</dt><dd>Conservé sous forme de marquage (<code>withdrawn_at</code>), jamais de suppression de la preuve.</dd>
+        </dl>
+      </section>
+
+      <section class="panel">
+        <h2>Synthèse (tout l'historique)</h2>
+        <div class="stats-grid">
+          <StatCard label="Total consentements" value={breakdown.total} />
+          <StatCard label="Actifs" value={breakdown.active} />
+          <StatCard label="Retirés" value={breakdown.withdrawn} />
+          <StatCard label="Expirés" value={breakdown.expired} />
+        </div>
+        <div class="stats-grid">
+          <StatCard label="Accept all" value={`${pct(stats.accept_all)}%`} />
+          <StatCard label="Reject all" value={`${pct(stats.reject_all)}%`} />
+          <StatCard label="Custom" value={`${pct(stats.custom)}%`} />
+          <StatCard label="Taux de retrait" value={`${Math.round(breakdown.withdrawal_rate * 100)}%`} />
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Acceptation par catégorie</h2>
+        <ul>
+          <li>Nécessaires : 100 % (exemptés de consentement)</li>
+          <li>Fonctionnels : {pct(stats.functional_accepted)} %</li>
+          <li>Analytics : {pct(stats.analytics_accepted)} %</li>
+          <li>Marketing : {pct(stats.marketing_accepted)} %</li>
+        </ul>
+      </section>
+
+      <section class="panel">
+        <h2>Versions de politique recensées</h2>
+        <DataTable
+          columns={[
+            { key: 'label', label: 'Version' },
+            { key: 'value', label: 'Nb consentements' },
+          ]}
+          rows={breakdown.by_policy.map((p) => ({ label: p.label, value: p.value }))}
+        />
+      </section>
+
+      <div class="toolbar">
+        <a class="btn" href="/dashboard/consent/export">Export CSV (preuve complète)</a>
+        <a class="btn" href="/dashboard/consent/export-json">Export JSON (preuve complète)</a>
+      </div>
+    </Layout>
+  );
 });
 
 /**
