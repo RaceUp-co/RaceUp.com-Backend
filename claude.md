@@ -3,6 +3,18 @@
 > Hono + TypeScript | Cloudflare Workers + D1 (SQLite) + R2 (fichiers)
 > URL: raceup-backend-api.jacqueslucas-m2101.workers.dev
 
+## ⚡ Protocole d'efficacité tokens (lire en premier)
+
+Ce fichier est ta **carte**. Sers-t'en pour aller droit au but au lieu d'explorer.
+
+1. **Ne jamais lire/scanner** : `node_modules/`, `.wrangler/`, `dist/`, `package-lock.json`. Aucune valeur, coût énorme.
+2. **Localise via cette carte** (sections Architecture / Routes / Schema) **avant** tout Glob/Grep. La réponse est presque toujours déjà ici.
+3. **Lis ciblé** : `offset`/`limit` sur les gros fichiers, Grep le symbole précis plutôt que lire un fichier entier.
+4. **Détail exhaustif** → `docs/architecture.md` (source de vérité), à lire **à la demande seulement**, jamais par défaut.
+5. **Ne relis pas** un fichier déjà lu/édité dans la session (le harness suit l'état).
+6. **Réutilise** les services/validators/middlewares listés ci-dessous — ne réécris pas ce qui existe.
+7. Va à l'essentiel : pas de récap inutile, réponses concises.
+
 ## Consignes
 
 - Mettre a jour `docs/architecture.md` a chaque modification (routes, tables, logique metier)
@@ -17,7 +29,7 @@
 - Cloudflare Workers (wrangler 4.0+)
 - D1 Database: `RaceUp-User-Data` (SQLite)
 - R2 Bucket: `raceup-project-files`
-- Secrets: JWT_SECRET (via wrangler secret)
+- Secrets: `JWT_SECRET` (signature JWT) + `CONSENT_SALT` (hash IP RGPD) — via `wrangler secret put`
 
 ## Architecture Fichiers
 
@@ -30,7 +42,8 @@ src/
 │   ├── projects.ts       CRUD projets + tickets + fichiers
 │   ├── admin.ts          Dashboard stats + gestion users/projects (CRUD+delete+patch) + support tickets + security logging
 │   ├── support.ts        Support ticket endpoint (public POST)
-│   └── tracking.ts       Page views (public)
+│   ├── tracking.ts       Page views (public)
+│   └── consent.ts        Consentement cookies RGPD (post, status, policy, withdraw, my-consents)
 ├── dashboard/
 │   ├── styles.ts             CSS template string
 │   ├── session.ts            HMAC cookie sign/verify/middleware
@@ -49,7 +62,8 @@ src/
 │       ├── projects.tsx      Project list (active+archived), detail, edit all fields, archive/restore
 │       ├── database.tsx      MPD schema (SVG), tables explorer, SQL query (super_admin)
 │       ├── docs.tsx          API documentation + tester
-│       └── config.tsx        Placeholder
+│       ├── config.tsx        Placeholder
+│       └── consent.tsx       Consentements RGPD (liste, filtres, stats, export CSV, withdraw)
 ├── middleware/
 │   ├── auth.ts           Bearer JWT verification → injecte jwtPayload
 │   ├── admin.ts          Role check (admin/super_admin) → injecte currentUser
@@ -65,15 +79,20 @@ src/
 │   ├── security.ts       Security event logging → D1 security_events (fire-and-forget)
 │   ├── oauth.ts          Verification Google (userinfo API) + Apple (JWKS RS256)
 │   ├── cookies.ts        Cookie HttpOnly raceup_session (refresh token)
-│   └── support.ts        CRUD support tickets (create, list, getById, close)
+│   ├── support.ts        CRUD support tickets (create, list, getById, close)
+│   └── consent.ts        Consentement RGPD (create, getCurrent, withdraw, list, stats, exportCsv)
 ├── validators/
 │   ├── auth.ts           Schemas Zod (register, login, OAuth)
 │   ├── admin.ts          Schemas Zod (projets, role update)
-│   └── support.ts        Schemas Zod (support ticket creation, filters)
+│   ├── support.ts        Schemas Zod (support ticket creation, filters)
+│   └── consent.ts        Schemas Zod (consent input, withdraw, status query)
+├── utils/
+│   └── hash.ts           hashIP (SHA-256 + sel CONSENT_SALT, RGPD) + getClientIP (headers CF)
 db/
 ├── schema.sql            Tables initiales
 └── migrations/           Evolutions schema (appliquees via wrangler d1 execute)
-    └── 006-security-events.sql  Table security_events + index
+    ├── 006-security-events.sql  Table security_events + index
+    └── 007-cookie-consents.sql  Table cookie_consents (preuve RGPD) + index
 docs/
 ├── architecture.md       Documentation complete (source de verite)
 └── TODO.md               Roadmap
@@ -165,6 +184,18 @@ R2 key: `projects/{projectId}/{uuid}.ext`
 |--------|-------|-------------|
 | POST | /pageview | Enregistre page vue (path, referrer?, user_agent, country CF) |
 
+### Consent / RGPD `/api/consent`
+
+| Method | Route | Auth | Description |
+|--------|-------|------|-------------|
+| POST | / | JWT optionnel | Enregistre un consentement (categories, policy_version, consent_method). Bearer présent → lié au user_id. Requiert `CONSENT_SALT` |
+| GET | /status?consent_id= | - | Validité d'un consent + catégories (raisons: not_found/withdrawn/outdated_policy/expired) |
+| GET | /policy | - | Version politique courante + description des 4 catégories |
+| POST | /withdraw | - | Retrait d'un consentement (consent_id, reason?) — preuve conservée |
+| GET | /my-consents | JWT | Droit d'accès RGPD : liste les consents du user connecté |
+
+`categories`: { functional, analytics, marketing } (necessary toujours vrai). `consent_method`: accept_all | reject_all | custom. Durée ~13 mois. IP **jamais en clair** (hash SHA-256 + sel).
+
 ### Health
 
 | GET | /api/health | `{status:"ok", timestamp}` |
@@ -196,6 +227,11 @@ R2 key: `projects/{projectId}/{uuid}.ext`
 | POST | /database/query | Executer SQL (super_admin only) |
 | GET | /docs | Documentation API + testeur integre |
 | GET | /config | Placeholder — bientot disponible |
+| GET | /consent | Consentements RGPD — liste + stats |
+| GET | /consent/search | Recherche + filtres (status, method, policy, dates) |
+| GET | /consent/export | Export CSV (streaming) |
+| GET | /consent/:id | Detail d'un consentement + historique |
+| POST | /consent/:id/withdraw | Retirer un consentement |
 
 **Auth**: Cookie HMAC-SHA256 signe (`dashboard_session`), HttpOnly, Secure(prod), SameSite=Strict, 2h expiry.
 **Middleware chain**: Security headers → `loggerMiddleware` → `dashboardAuthMiddleware` → route handler (+ `superAdminDashboardMiddleware` pour /database).
@@ -241,6 +277,12 @@ security_events (id AUTOINCREMENT, event_type['login_failed'|'login_success'|'ac
                  'role_changed'|'password_changed'|'email_changed'|'admin_user_deleted'],
                  user_id?, target_user_id?, ip?, details?, created_at)
   IDX: created_at, event_type, user_id
+
+cookie_consents (id PK, consent_id, user_id? FK→users SET NULL, ip_hash, user_agent?, country?,
+                 necessary[1], functional[0|1], analytics[0|1], marketing[0|1],
+                 policy_version, consent_method['accept_all'|'reject_all'|'custom'], source_url?,
+                 created_at, expires_at, withdrawn_at?, withdrawn_reason?)  -- preuve immuable RGPD
+  IDX: consent_id, user_id, created_at, policy_version, expires_at
 ```
 
 Relations: users 1→N projects 1→N tickets 1→N ticket_messages
@@ -248,6 +290,7 @@ Relations: users 1→N projects 1→N tickets 1→N ticket_messages
            users 1→N refresh_tokens
            page_views: standalone
            support_tickets: standalone (pas de FK vers users)
+           cookie_consents: user_id nullable (FK→users SET NULL — consent anonyme possible)
 
 ## Patterns importants
 
@@ -270,21 +313,27 @@ Codes: UNAUTHORIZED(401), FORBIDDEN(403), NOT_FOUND(404), EMAIL_ALREADY_EXISTS(4
 - Cookie: raceup_session, HttpOnly, Secure(prod), SameSite=Lax, domain .raceup.com(prod)
 - Password: PBKDF2-SHA-256, 50K iterations, salt 16 bytes, verify timing-safe
 
+**Consent RGPD**: preuve immuable (jamais de DELETE ; le retrait = marquage `withdrawn_at`). IP hachée SHA-256 + sel (`CONSENT_SALT`), jamais en clair. Consent valide si non retiré + non expiré (~13 mois) + `policy_version` à jour. Bump `POLICY_VERSION` → re-consentement forcé.
+
 ## Config Wrangler
 
 ```toml
 name = "raceup-backend-api"
 D1: binding=DB, database=RaceUp-User-Data
 R2: binding=R2, bucket=raceup-project-files
-vars: ENVIRONMENT=production, ACCESS_TOKEN_EXPIRY=900, REFRESH_TOKEN_EXPIRY=604800
-secrets: JWT_SECRET (wrangler secret put)
+vars: ENVIRONMENT=production, ACCESS_TOKEN_EXPIRY=900, REFRESH_TOKEN_EXPIRY=604800,
+      POLICY_VERSION=v1.0.0, GOOGLE_CLIENT_ID, APPLE_CLIENT_ID
+secrets: JWT_SECRET, CONSENT_SALT (hash IP RGPD) — via wrangler secret put
 ```
 
 ## Commandes
 
 ```bash
-npm run dev      # wrangler dev (localhost:8787)
-npm run deploy   # wrangler deploy
-npx wrangler d1 execute RaceUp-User-Data --file=db/migrations/xxx.sql  # Appliquer migration
-npx wrangler secret put JWT_SECRET  # Configurer secret
+npm run dev               # wrangler dev (localhost:8787)
+npm run deploy            # wrangler deploy
+npm run db:setup:local    # init + migrations + seed admin (BDD locale)
+npm run db:migrate:local  # applique les migrations 002→007 en local
+npx wrangler d1 execute RaceUp-User-Data --file=db/migrations/xxx.sql  # migration manuelle
+npx wrangler secret put JWT_SECRET    # secret signature JWT
+npx wrangler secret put CONSENT_SALT  # secret hash IP (RGPD)
 ```
