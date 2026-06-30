@@ -43,7 +43,8 @@ src/
 │   ├── admin.ts          Dashboard stats + gestion users/projects (CRUD+delete+patch) + support tickets + security logging
 │   ├── support.ts        Support ticket endpoint (public POST)
 │   ├── tracking.ts       Page views (public)
-│   └── consent.ts        Consentement cookies RGPD (post, status, policy, withdraw, my-consents)
+│   ├── consent.ts        Consentement cookies RGPD (post, status, policy, withdraw, my-consents)
+│   └── maintenance.ts    Statut mode maintenance (GET public)
 ├── dashboard/
 │   ├── styles.ts             CSS template string
 │   ├── session.ts            HMAC cookie sign/verify/middleware
@@ -63,7 +64,7 @@ src/
 │       ├── database.tsx      MPD schema (SVG), tables explorer, SQL query (super_admin)
 │       ├── docs.tsx          API documentation + tester
 │       ├── config.tsx        Placeholder
-│       └── consent.tsx       Consentements RGPD (liste, filtres, stats, export CSV, withdraw)
+│       └── consent.tsx       Consentements RGPD (liste, filtres, stats, graphiques, repartitions, registre, export CSV/JSON, withdraw)
 ├── middleware/
 │   ├── auth.ts           Bearer JWT verification → injecte jwtPayload
 │   ├── admin.ts          Role check (admin/super_admin) → injecte currentUser
@@ -80,7 +81,8 @@ src/
 │   ├── oauth.ts          Verification Google (userinfo API) + Apple (JWKS RS256)
 │   ├── cookies.ts        Cookie HttpOnly raceup_session (refresh token)
 │   ├── support.ts        CRUD support tickets (create, list, getById, close)
-│   └── consent.ts        Consentement RGPD (create, getCurrent, withdraw, list, stats, exportCsv)
+│   ├── consent.ts        Consentement RGPD (create, getCurrent, withdraw, list, stats, timeSeries, breakdown, exportCsv, exportJson)
+│   └── maintenance.ts    Etat maintenance (get/set + isMaintenanceActive fenetre horaire)
 ├── validators/
 │   ├── auth.ts           Schemas Zod (register, login, OAuth)
 │   ├── admin.ts          Schemas Zod (projets, role update)
@@ -92,7 +94,8 @@ db/
 ├── schema.sql            Tables initiales
 └── migrations/           Evolutions schema (appliquees via wrangler d1 execute)
     ├── 006-security-events.sql  Table security_events + index
-    └── 007-cookie-consents.sql  Table cookie_consents (preuve RGPD) + index
+    ├── 007-cookie-consents.sql  Table cookie_consents (preuve RGPD) + index
+    └── 008-maintenance.sql      Table maintenance_state (mono-ligne, mode maintenance)
 docs/
 ├── architecture.md       Documentation complete (source de verite)
 └── TODO.md               Roadmap
@@ -196,6 +199,14 @@ R2 key: `projects/{projectId}/{uuid}.ext`
 
 `categories`: { functional, analytics, marketing } (necessary toujours vrai). `consent_method`: accept_all | reject_all | custom. Durée ~13 mois. IP **jamais en clair** (hash SHA-256 + sel).
 
+### Maintenance `/api/maintenance` (public)
+
+| Method | Route | Description |
+|--------|-------|-------------|
+| GET | / | Statut effectif `{active, is_enabled, starts_at, ends_at, message}` — toujours 200, front fail-open |
+
+`active` = `is_enabled` ET dans la fenetre `[starts_at, ends_at]` (bornes nullables). Edite via `/dashboard/config`.
+
 ### Health
 
 | GET | /api/health | `{status:"ok", timestamp}` |
@@ -226,10 +237,13 @@ R2 key: `projects/{projectId}/{uuid}.ext`
 | GET | /database?tab=query | Interface requete SQL (super_admin only) |
 | POST | /database/query | Executer SQL (super_admin only) |
 | GET | /docs | Documentation API + testeur integre |
-| GET | /config | Placeholder — bientot disponible |
-| GET | /consent | Consentements RGPD — liste + stats |
-| GET | /consent/search | Recherche + filtres (status, method, policy, dates) |
+| GET | /config | Mode maintenance — formulaire (interrupteur + dates debut/fin + message) |
+| POST | /config/maintenance | Enregistre l'etat de maintenance (validation fin > debut) |
+| GET | /consent | Consentements RGPD — liste + stats + graphiques (serie temporelle, top pays, categories %) + repartitions (actifs/retires/expires) + filtres (dont country) |
+| GET | /consent/search | Recherche par consent_id (historique des versions) |
 | GET | /consent/export | Export CSV (streaming) |
+| GET | /consent/export-json | Export JSON (streaming, usage interne/audit RGPD) |
+| GET | /consent/register | Registre RGPD presentable (synthese conformite pour controle CNIL) |
 | GET | /consent/:id | Detail d'un consentement + historique |
 | POST | /consent/:id/withdraw | Retirer un consentement |
 
@@ -283,6 +297,9 @@ cookie_consents (id PK, consent_id, user_id? FK→users SET NULL, ip_hash, user_
                  policy_version, consent_method['accept_all'|'reject_all'|'custom'], source_url?,
                  created_at, expires_at, withdrawn_at?, withdrawn_reason?)  -- preuve immuable RGPD
   IDX: consent_id, user_id, created_at, policy_version, expires_at
+
+maintenance_state (id PK CHECK(id=1), is_enabled[0|1], starts_at?, ends_at?, message?,
+                   updated_at?, updated_by?)  -- mono-ligne, mode maintenance du site public
 ```
 
 Relations: users 1→N projects 1→N tickets 1→N ticket_messages
