@@ -34,6 +34,8 @@ import {
   exportConsentsCsv,
 } from '../services/consent';
 import { consentFiltersSchema } from '../validators/consent';
+import { adminPurchasesQuerySchema, validationHook } from '../validators/payments';
+import { listOrdersAdmin, toPublicOrder } from '../services/order';
 
 const admin = new Hono<AppType>();
 
@@ -285,6 +287,22 @@ admin.get('/projects', async (c) => {
     data: {
       projects: projectsResult,
       total: countResult?.total ?? 0,
+      page,
+      limit,
+    },
+  });
+});
+
+// GET /purchases?status=&page=1&limit=50 — Paiements clients (acomptes + echeances), pagines
+admin.get('/purchases', zValidator('query', adminPurchasesQuerySchema, validationHook), async (c) => {
+  const { status, page, limit } = c.req.valid('query');
+  const { orders, total } = await listOrdersAdmin(c.env.DB, { status, page, limit });
+
+  return c.json({
+    success: true,
+    data: {
+      purchases: orders.map((o) => toPublicOrder(o, { includeCustomer: true })),
+      total,
       page,
       limit,
     },

@@ -1,3 +1,5 @@
+import { getOrderStats } from './order';
+
 export async function recordPageView(
   db: D1Database,
   data: {
@@ -65,7 +67,7 @@ export async function getAdminStats(
   totalRevenue: number;
   pendingPurchases: number;
 }> {
-  const [usersResult, projectsResult, activeResult] = await Promise.all([
+  const [usersResult, projectsResult, activeResult, orderStats] = await Promise.all([
     db.prepare('SELECT COUNT(*) as count FROM users').first<{ count: number }>(),
     db
       .prepare('SELECT COUNT(*) as count FROM projects WHERE is_archived = 0')
@@ -73,13 +75,16 @@ export async function getAdminStats(
     db
       .prepare("SELECT COUNT(*) as count FROM projects WHERE status = 'in_progress' AND is_archived = 0")
       .first<{ count: number }>(),
+    getOrderStats(db),
   ]);
 
   return {
     totalUsers: usersResult?.count ?? 0,
     totalProjects: projectsResult?.count ?? 0,
     activeProjects: activeResult?.count ?? 0,
-    totalRevenue: 0,
-    pendingPurchases: 0,
+    // Encaissements Stripe confirmes (hors remboursements), en euros
+    totalRevenue: orderStats.revenue_cents / 100,
+    // Echeances a regler + paiements differes en cours de confirmation
+    pendingPurchases: orderStats.awaiting_count,
   };
 }
