@@ -98,7 +98,8 @@ src/
 ├── middleware/
 │   ├── auth.ts              Verification Bearer JWT, injection du payload dans le contexte
 │   ├── admin.ts             Verification role admin/super_admin
-│   └── logger.ts            Request logging → D1 request_logs (fire-and-forget)
+│   ├── logger.ts            Request logging → D1 request_logs (fire-and-forget)
+│   └── rate-limit.ts        Limitation de debit par IP (bindings Workers Rate Limiting)
 ├── services/
 │   ├── password.ts          hashPassword / verifyPassword (PBKDF2, comparaison timing-safe)
 │   ├── token.ts             Generation JWT access + refresh token opaque + hash SHA-256
@@ -426,12 +427,18 @@ Interface d'administration server-rendered avec Hono JSX SSR, dans le meme Worke
 | GET | /database?tab=tables | Tables explorer: structure, FK, index | Super Admin |
 | GET | /database?tab=query | Interface requete SQL | Super Admin |
 | POST | /database/query | Executer requete SQL | Super Admin |
-| GET | /docs | Documentation API + testeur integre | Super Admin (voir note) |
-| GET | /config | Mode maintenance (formulaire) | Super Admin (voir note) |
+| GET | /docs | Documentation API + testeur integre | Admin |
+| GET | /config | Mode maintenance (formulaire) | Admin |
 
-> Note : `databaseRoutes.use('*', superAdminDashboardMiddleware)` s'applique a toutes les routes `/dashboard/*`
-> enregistrees APRES `databaseRoutes` dans `index.ts` (docs, config). Elles sont donc de fait reservees aux
-> super_admin, alors que la navigation les affiche aux admins. Les routes Paiements sont montees avant : accessibles aux admins.
+> `superAdminDashboardMiddleware` est monte explicitement sur `/database` et `/database/*` (et non `*`, qui
+> s'appliquait a toutes les routes `/dashboard/*` enregistrees apres lui).
+
+**Securite des tableaux** : `DataTable` echappe toute chaine (texte). Pour produire du HTML dans une cellule,
+utiliser le gabarit `html` de `hono/html`, qui echappe chaque valeur interpolee
+(ex. `html\`<a href="/dashboard/projects/${id}">${nom}</a>\``). Ne jamais construire du HTML par concatenation :
+noms de projets, messages d'erreur journalises (`request_logs.error` contient les reponses d'erreur, donc
+des donnees envoyees par n'importe quel visiteur) et `consent_id` sont controles par des tiers.
+La page de login n'affiche que des messages issus de codes connus (`?error=invalid|missing|oauth|forbidden|rate_limited`).
 
 **Authentification dashboard:**
 - Cookie `dashboard_session` signe HMAC-SHA256 avec `JWT_SECRET`
@@ -581,7 +588,9 @@ Cela permet aux admins de consulter et gerer tous les projets depuis le dashboar
 | Tokens hashes | Refresh tokens stockes en SHA-256, pas en clair |
 | SQL injection | Requetes parametrees exclusivement (`prepare().bind()`) |
 | Validation | Toutes les entrees validees par Zod avant traitement |
-| CORS | Limite a `raceup.com` + localhost en dev |
+| CORS | Origines du site (`race-up.net`, `raceup.com`, www), previews `*.raceup-com.pages.dev`, `http://localhost[:port]` (regex stricte : `localhost.attaquant.com` refuse) — `utils/origins.ts` |
+| Rate limiting | Workers Rate Limiting par IP (`middleware/rate-limit.ts`) : `AUTH_RATE_LIMITER` 10/min (register, login, OAuth, suppression de compte, login dashboard, paiements), `FORMS_RATE_LIMITER` 5/min (support / devis) → `429 RATE_LIMITED` |
+| XSS dashboard | Cellules echappees par defaut, HTML uniquement via `html\`\`` (auto-echappement) |
 | Upload validation | MIME type + taille verifie cote serveur (non-admin) |
 | IDs | UUID v4 non predictibles (`crypto.randomUUID()`) |
 | Security audit | Logging des login, suppressions, changements de role dans `security_events` |
@@ -620,3 +629,5 @@ Cela permet aux admins de consulter et gerer tous les projets depuis le dashboar
 | STRIPE_WEBHOOK_SECRET | Secret (optionnel) | Secret de signature du webhook (whsec_...) |
 | SITE_URL | Env var | URL publique du site (`https://race-up.net`), retour Stripe par defaut |
 | STRIPE_INVOICE_CREATION | Env var | `"true"` : facture Stripe generee pour chaque paiement |
+| AUTH_RATE_LIMITER | Rate limit | 10 requetes / 60 s par IP et par endpoint sensible |
+| FORMS_RATE_LIMITER | Rate limit | 5 requetes / 60 s par IP (formulaires publics) |

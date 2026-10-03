@@ -79,7 +79,8 @@ src/
 ├── middleware/
 │   ├── auth.ts           Bearer JWT verification → injecte jwtPayload
 │   ├── admin.ts          Role check (admin/super_admin) → injecte currentUser
-│   └── logger.ts         Request logging → D1 request_logs (fire-and-forget)
+│   ├── logger.ts         Request logging → D1 request_logs (fire-and-forget)
+│   └── rate-limit.ts     rateLimit(limiter, scope) : 429 RATE_LIMITED par IP (AUTH 10/min, FORMS 5/min)
 ├── services/
 │   ├── password.ts       PBKDF2-SHA-256 hash + timing-safe verify
 │   ├── token.ts          JWT HS256 (access) + opaque 64-byte (refresh) + SHA-256 hash
@@ -377,6 +378,8 @@ Codes: UNAUTHORIZED(401), FORBIDDEN(403), NOT_FOUND(404), EMAIL_ALREADY_EXISTS(4
 - Cookie: raceup_session, HttpOnly, Secure(prod), SameSite=Lax, domain .raceup.com(prod)
 - Password: PBKDF2-SHA-256, 50K iterations, salt 16 bytes, verify timing-safe
 
+**Dashboard anti-XSS**: `DataTable` échappe toute chaîne ; HTML dans une cellule UNIQUEMENT via `html\`...\`` (hono/html, auto-échappement). Jamais de HTML par concaténation (noms de projets, erreurs journalisées, consent_id = données tierces). Login dashboard : `?error=` = codes connus seulement.
+
 **Paiements**: acompte = commande `pending` avec `project_id` réservé → au paiement, batch D1 (`UPDATE orders` conditionnel + `INSERT OR IGNORE INTO projects`) : jamais de projet en double. Échéance = commande `awaiting_payment` créée par un admin, payable depuis l'espace projet. Statuts et flux : `docs/architecture.md` § Paiements Stripe.
 
 **Consent RGPD**: preuve immuable (jamais de DELETE ; le retrait = marquage `withdrawn_at`). IP hachée SHA-256 + sel (`CONSENT_SALT`), jamais en clair. Consent valide si non retiré + non expiré (~13 mois) + `policy_version` à jour. Bump `POLICY_VERSION` → re-consentement forcé.
@@ -391,6 +394,7 @@ vars: ENVIRONMENT=production, ACCESS_TOKEN_EXPIRY=900, REFRESH_TOKEN_EXPIRY=6048
       POLICY_VERSION=v1.0.0, GOOGLE_CLIENT_ID, APPLE_CLIENT_ID,
       SITE_URL=https://race-up.net, STRIPE_INVOICE_CREATION=true
 secrets: JWT_SECRET, CONSENT_SALT (hash IP RGPD), STRIPE_SECRET_KEY + STRIPE_WEBHOOK_SECRET (optionnels) — via wrangler secret put
+ratelimits: AUTH_RATE_LIMITER (10/60s), FORMS_RATE_LIMITER (5/60s) — bindings Workers Rate Limiting
 ```
 
 ## Commandes

@@ -13,13 +13,12 @@
 ## Priorite haute
 
 - [ ] Activer le paiement en ligne : `npm run stripe:setup` (cle Stripe live → webhook + secrets STRIPE_*)
-- [ ] Dashboard : restreindre `superAdminDashboardMiddleware` a `/database*` (aujourd'hui il bloque aussi `/docs` et `/config` aux admins, cf. docs/architecture.md)
 - [ ] Configurer un custom domain Cloudflare pour l'API (ex: `api.raceup.com`)
 - [ ] Mettre en place des tests automatises (vitest + miniflare)
 
 ## Priorite moyenne
 
-- [ ] Ajouter un systeme de rate limiting (via D1 ou passage au plan Workers Paid)
+- [ ] Implementer `PATCH /api/auth/me`, `POST /api/auth/change-password` et `POST /api/auth/change-email` (appeles par la page Parametres du front, documentes mais absents du code)
 - [ ] Ajouter la verification email (envoi d'un lien de confirmation a l'inscription)
 - [ ] Ajouter la fonctionnalite "mot de passe oublie" (reset par email)
 
@@ -75,3 +74,5 @@
 - [x] `GET /api/admin/purchases` + CA reel dans `/dashboard/overview`
 - [x] Dashboard : page Paiements + demande/annulation d'echeance depuis la fiche projet
 - [x] Support : categorie `quote_request` (demandes de devis de la page contact)
+- [x] Securite : XSS stockee du dashboard corrigee (cellules echappees par defaut), rate limiting par IP (Workers Rate Limiting), CORS resserre, login dashboard sans texte arbitraire, middleware super_admin limite a /database, Hono mis a jour (advisories)
+- [x] Migration 006 (security_events) appliquee en production
