@@ -11,6 +11,12 @@ export type Bindings = {
   APPLE_CLIENT_ID: string;
   CONSENT_SALT: string;
   POLICY_VERSION: string;
+  // Paiements Stripe — secrets optionnels : sans eux, le paiement en ligne est desactive
+  // proprement (PAYMENTS_UNAVAILABLE) et le front bascule sur la demande de devis.
+  STRIPE_SECRET_KEY?: string;
+  STRIPE_WEBHOOK_SECRET?: string;
+  SITE_URL: string; // URL publique du site (retour de Stripe Checkout)
+  STRIPE_INVOICE_CREATION?: string; // "true" = facture Stripe generee pour chaque paiement
 };
 
 export type Variables = {
@@ -115,6 +121,46 @@ export type DashboardSession = {
   email: string;
   role: string;
   exp: number;
+};
+
+// ---------- Paiements / commandes ----------
+
+export type OrderKind = 'deposit' | 'milestone';
+
+export type OrderStatus =
+  | 'awaiting_payment' // echeance demandee par un admin, pas encore de session Stripe
+  | 'pending' // session Stripe Checkout ouverte
+  | 'processing' // paiement differe en cours de confirmation (ex : SEPA)
+  | 'paid'
+  | 'failed'
+  | 'expired' // session d'acompte expiree sans paiement
+  | 'refunded'
+  | 'canceled'; // echeance annulee par un admin
+
+export type Order = {
+  id: string;
+  user_id: string | null;
+  customer_email: string;
+  customer_name: string | null;
+  project_id: string | null;
+  kind: OrderKind;
+  service_type: string | null;
+  config: string | null;
+  description: string;
+  amount_cents: number;
+  project_total_cents: number | null;
+  currency: string;
+  status: OrderStatus;
+  stripe_session_id: string | null;
+  stripe_payment_intent_id: string | null;
+  receipt_url: string | null;
+  lang: string;
+  terms_accepted_at: string | null;
+  created_by: 'user' | 'admin';
+  created_at: string;
+  updated_at: string;
+  paid_at: string | null;
+  refunded_at: string | null;
 };
 
 // ---------- Maintenance ----------

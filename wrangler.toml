@@ -19,6 +19,9 @@ REFRESH_TOKEN_EXPIRY = "604800"
 GOOGLE_CLIENT_ID = ""
 APPLE_CLIENT_ID = ""
 POLICY_VERSION = "v1.0.0"
+# Paiements Stripe (secrets STRIPE_SECRET_KEY + STRIPE_WEBHOOK_SECRET via `wrangler secret put`)
+SITE_URL = "https://race-up.net"
+STRIPE_INVOICE_CREATION = "true"
 
 # Observabilité Cloudflare
 [observability]
