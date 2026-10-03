@@ -8,7 +8,9 @@ import trackingRoutes from './routes/tracking';
 import consentRoutes from './routes/consent';
 import supportRoutes from './routes/support';
 import maintenanceRoutes from './routes/maintenance';
+import paymentRoutes from './routes/payments';
 import { loggerMiddleware } from './middleware/logger';
+import { isCorsAllowedOrigin } from './utils/origins';
 import { dashboardAuthMiddleware } from './dashboard/session';
 import dashboardAuthRoutes from './dashboard/routes/auth';
 import overviewRoutes from './dashboard/routes/overview';
@@ -40,19 +42,7 @@ app.use('*', loggerMiddleware);
 app.use(
   '/api/*',
   cors({
-    origin: (origin) => {
-      const allowed = [
-        'https://raceup.com',
-        'https://www.raceup.com',
-        'https://race-up.net',
-        'https://www.race-up.net',
-      ];
-      if (!origin) return null;
-      if (allowed.includes(origin)) return origin;
-      if (origin.endsWith('.pages.dev')) return origin;
-      if (origin.startsWith('http://localhost')) return origin;
-      return null;
-    },
+    origin: (origin) => (isCorsAllowedOrigin(origin) ? origin : null),
     allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowHeaders: ['Content-Type', 'Authorization'],
     credentials: true,
@@ -73,6 +63,7 @@ app.route('/api/track', trackingRoutes);
 app.route('/api/consent', consentRoutes);
 app.route('/api/support', supportRoutes);
 app.route('/api/maintenance', maintenanceRoutes);
+app.route('/api/payments', paymentRoutes);
 
 // Dashboard — public routes (login/logout)
 app.route('/dashboard', dashboardAuthRoutes);
