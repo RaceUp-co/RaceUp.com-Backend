@@ -12,6 +12,8 @@
 
 ## Priorite haute
 
+- [ ] Activer le paiement en ligne : `npm run stripe:setup` (cle Stripe live → webhook + secrets STRIPE_*)
+- [ ] Dashboard : restreindre `superAdminDashboardMiddleware` a `/database*` (aujourd'hui il bloque aussi `/docs` et `/config` aux admins, cf. docs/architecture.md)
 - [ ] Configurer un custom domain Cloudflare pour l'API (ex: `api.raceup.com`)
 - [ ] Mettre en place des tests automatises (vitest + miniflare)
 
@@ -25,6 +27,12 @@
 
 - [ ] Ajouter le support OAuth (Google, GitHub) comme methode de connexion alternative
 - [ ] Ajouter des metriques et monitoring (Cloudflare Analytics)
+
+## Paiements - evolutions
+
+- [ ] Email au client quand une echeance est demandee (aujourd'hui visible uniquement dans son espace projet)
+- [ ] Abonnement de maintenance mensuel (Stripe Billing) en complement du module "Maintenance 12 mois"
+- [ ] Bouton "Rembourser" dans le dashboard (aujourd'hui : depuis le dashboard Stripe, statut synchronise par webhook)
 
 ## Dashboard - Fonctionnalites futures
 
@@ -63,3 +71,7 @@
 - [x] Dashboard: schema MPD visuel de la base de donnees (SVG interactif)
 - [x] API: `PATCH /api/admin/projects/:id` pour modifier un projet
 - [x] API: `DELETE /api/admin/users/:id` pour supprimer un utilisateur (super_admin)
+- [x] Paiements Stripe Checkout : acompte 40 % (configurateur), echeances, webhook signe, factures, remboursements synchronises (migration 009)
+- [x] `GET /api/admin/purchases` + CA reel dans `/dashboard/overview`
+- [x] Dashboard : page Paiements + demande/annulation d'echeance depuis la fiche projet
+- [x] Support : categorie `quote_request` (demandes de devis de la page contact)

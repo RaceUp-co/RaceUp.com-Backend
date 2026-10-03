@@ -50,8 +50,9 @@ Client (raceup.com)
 | Hachage MDP | PBKDF2-SHA-256 (Web Crypto) | Natif, zero dependance externe |
 | JWT | hono/jwt (HS256) | Inclus dans Hono |
 | Validation | Zod + @hono/zod-validator | Typage automatique, messages clairs |
+| Paiements | Stripe Checkout (SDK `stripe`, client fetch + SubtleCrypto) | Page de paiement hebergee (PCI), CB / Apple Pay / Google Pay, factures |
 
-**Dependances runtime : 3** — `hono`, `zod`, `@hono/zod-validator`
+**Dependances runtime : 4** — `hono`, `zod`, `@hono/zod-validator`, `stripe`
 
 ## Structure des fichiers
 
@@ -65,7 +66,10 @@ src/
 │   ├── projects.ts          Endpoints projets : CRUD projets, tickets, fichiers (user auth)
 │   ├── support.ts           Endpoints support tickets : creation publique
 │   ├── consent.ts           Endpoints consent cookies (public) : POST /api/consent, status, policy, withdraw, my-consents
+│   ├── payments.ts          Paiements Stripe : config, checkout (acompte), statut, commandes, echeances, webhook
 │   └── tracking.ts          Endpoints tracking : page views (public)
+├── data/
+│   └── catalog.ts           Catalogue tarifaire du configurateur (SOURCE DE VERITE des prix) + priceConfiguration()
 ├── dashboard/
 │   ├── styles.ts            CSS template string (dark theme monospace)
 │   ├── session.ts           HMAC cookie sign/verify + auth middleware
@@ -74,6 +78,7 @@ src/
 │   │   ├── nav.tsx          Sidebar navigation (liens conditionnels par role)
 │   │   ├── stat-card.tsx    Carte statistique (label, value, delta)
 │   │   ├── table.tsx        DataTable generique + Pagination
+│   │   ├── payments.tsx     OrdersTable, OrderStatusBadge, suggestNextMilestone (echeancier 40/40/20)
 │   │   └── chart.tsx        BarChart SVG inline
 │   └── routes/
 │       ├── auth.tsx         Login/logout (GET/POST)
@@ -81,13 +86,15 @@ src/
 │       ├── logs.tsx         Request logs: filtres, pagination
 │       ├── errors.tsx       Erreurs: vue liste + groupee
 │       ├── users.tsx        Users: list, detail, edit profil, role change, delete with confirmation
-│       ├── projects.tsx     Projects: list (actifs+archives), detail, edit all fields, archive/restore
+│       ├── projects.tsx     Projects: list (actifs+archives), detail (+ paiements + demande d'echeance), edit all fields, archive/restore
+│       ├── payments.tsx     Paiements: stats d'encaissement, liste filtrable, demande/annulation d'echeance
 │       ├── consent.tsx      Consentement: liste filtrable + KPIs, detail + historique, recherche, export CSV, withdraw admin
 │       ├── database.tsx     Schema MPD (SVG), tables explorer, SQL query (super_admin)
 │       ├── docs.tsx         API docs + testeur fetch()
 │       └── config.tsx       Placeholder
 ├── utils/
-│   └── hash.ts              hashIP (SHA-256 + CONSENT_SALT) pour pseudonymiser les IPs dans cookie_consents
+│   ├── hash.ts              hashIP (SHA-256 + CONSENT_SALT) pour pseudonymiser les IPs dans cookie_consents
+│   └── origins.ts           Origines du site : CORS + URL de retour Stripe (liste unique)
 ├── middleware/
 │   ├── auth.ts              Verification Bearer JWT, injection du payload dans le contexte
 │   ├── admin.ts             Verification role admin/super_admin
@@ -99,7 +106,10 @@ src/
 │   ├── project.ts           CRUD D1 : projects (create, get, rename, archive)
 │   ├── ticket.ts            CRUD D1 : tickets + ticket_messages
 │   ├── file.ts              CRUD D1 : project_files (metadata) + R2 storage helpers
-│   ├── analytics.ts         Stats admin : inscriptions, pages vues
+│   ├── analytics.ts         Stats admin : inscriptions, pages vues, CA encaisse (orders)
+│   ├── order.ts             CRUD D1 : orders (transitions de statut idempotentes, stats, vue publique)
+│   ├── payment.ts           Orchestration Stripe Checkout : acompte, echeance, synchronisation, remboursement
+│   ├── stripe.ts            Client Stripe Workers, verification webhook, client Stripe par user (stripe_customers)
 │   ├── support.ts           CRUD D1 : support_tickets (public, sans FK users)
 │   ├── security.ts          Security event logging → D1 security_events (fire-and-forget)
 │   ├── oauth.ts             OAuth Google/Apple
@@ -109,7 +119,11 @@ src/
     ├── auth.ts              Schemas Zod pour auth
     ├── admin.ts             Schemas Zod pour admin
     ├── support.ts           Schemas Zod pour support tickets
-    └── consent.ts           Schemas Zod pour consent (create, withdraw, list filters)
+    ├── consent.ts           Schemas Zod pour consent (create, withdraw, list filters)
+    └── payments.ts          Schemas Zod paiements (checkout, filtres) + validationHook (format d'erreur standard)
+
+scripts/
+└── stripe-setup.mjs         Active Stripe en une commande : webhook + secrets wrangler (npm run stripe:setup)
 
 db/
 ├── schema.sql               Tables: users, refresh_tokens, projects, page_views
@@ -118,7 +132,9 @@ db/
     ├── 002_request_logs.sql     Table: request_logs + index (dashboard monitoring)
     ├── 005-support-tickets.sql  Table: support_tickets + index (system ticketing public)
     ├── 006-security-events.sql  Table: security_events + index (audit logging)
-    └── 007-cookie-consents.sql  Table: cookie_consents + index (registre RGPD des consentements)
+    ├── 007-cookie-consents.sql  Table: cookie_consents + index (registre RGPD des consentements)
+    ├── 008-maintenance.sql      Table: maintenance_state (mono-ligne)
+    └── 009-orders.sql           Tables: orders (paiements Stripe) + stripe_customers
 ```
 
 ## Schema de base de donnees
@@ -214,6 +230,33 @@ db/
   IDX: consent_id, user_id, created_at, policy_version
 
 Immutabilite : un changement = nouvelle ligne (meme consent_id). Retrait = UPDATE withdrawn_at, pas DELETE (preuve CNIL).
+
+┌──────────────────────────────────┐
+│            orders                 │   Un paiement Stripe (registre comptable)
+├──────────────────────────────────┤
+│ id TEXT PK (UUID v4)              │
+│ user_id TEXT FK → users SET NULL  │   conserve si le compte est supprime
+│ customer_email / customer_name    │   snapshot du client
+│ project_id TEXT                   │   acompte : id RESERVE (projet cree au paiement)
+│ kind TEXT                         │   deposit | milestone
+│ service_type / config (JSON)      │   config = {"base","options"[]} (acompte)
+│ description TEXT                  │   libelle (Stripe, facture, espace client)
+│ amount_cents INTEGER              │   montant de CE paiement
+│ project_total_cents INTEGER       │   prix total du projet
+│ status TEXT                       │   awaiting_payment|pending|processing|paid|
+│                                   │   failed|expired|refunded|canceled
+│ stripe_session_id UNIQUE          │
+│ stripe_payment_intent_id          │
+│ receipt_url                       │   facture Stripe (hosted) ou recu
+│ lang, terms_accepted_at           │   preuve d'acceptation des CGV
+│ created_by (user|admin)           │
+│ created_at, updated_at, paid_at,  │
+│ refunded_at                       │
+└──────────────────────────────────┘
+  IDX: stripe_session_id (unique), (user_id, created_at), (status, created_at), project_id, payment_intent
+
+stripe_customers (user_id FK → users CASCADE, livemode, customer_id UNIQUE, created_at)
+  PK (user_id, livemode) — un client Stripe par utilisateur et par mode (test/live)
 ```
 
 ## Endpoints API
@@ -283,6 +326,22 @@ Immutabilite : un changement = nouvelle ligne (meme consent_id). Retrait = UPDAT
 | GET | /projects?status=&page=1&limit=50&archived=0|1 | Tous les projets (pagination, filtres) |
 | POST | /projects | Creer projet pour un user |
 | PATCH | /projects/:id | Modifier un projet (tous les attributs) |
+| GET | /purchases?status=&page=1&limit=50 | Paiements clients (acomptes + echeances), pagines ; sans filtre, masque les paniers abandonnes |
+
+`/dashboard/overview` : `totalRevenue` = somme des paiements `paid` (euros), `pendingPurchases` = echeances a regler + paiements en traitement.
+
+### Paiements (`/api/payments`)
+
+| Methode | Route | Description | Auth |
+|---------|-------|-------------|------|
+| GET | /config | `{enabled, deposit_rate}` — le front adapte le configurateur (paiement ou devis) | Non |
+| POST | /checkout | Acompte 40 % depuis le configurateur → `{url, order_id}` (Stripe Checkout) | JWT |
+| GET | /checkout/:sessionId | Etat du paiement (page de confirmation), synchronise avec Stripe | JWT (proprietaire ou admin) |
+| GET | /orders?project_id= | Paiements visibles de l'utilisateur courant | JWT |
+| POST | /orders/:id/checkout | Regler une echeance → `{url}` | JWT (proprietaire) |
+| POST | /webhook | Evenements Stripe (signature `stripe-signature` verifiee sur le corps brut) | Signature |
+
+Voir la section **Paiements Stripe** ci-dessous (flux, statuts, securite).
 
 ### Support Tickets (`/api/support`) — Public
 
@@ -290,9 +349,11 @@ Immutabilite : un changement = nouvelle ligne (meme consent_id). Retrait = UPDAT
 |---------|-------|-------------|------|
 | POST | / | Creer un ticket support | Non |
 
-**Categories :** `account_issue`, `account_hacked`, `project_inaccessible`, `bug`, `billing`, `gdpr`, `question`, `other`
+**Categories :** `account_issue`, `account_hacked`, `project_inaccessible`, `bug`, `billing`, `gdpr`, `question`, `other`, `quote_request` (demande de devis : page contact / configurateur)
 
-**Priorite automatique :** `urgent` (account_hacked, gdpr) | `normal` (account_issue, project_inaccessible, bug, billing) | `low` (question, other)
+**Priorite automatique :** `urgent` (account_hacked, gdpr, quote_request) | `normal` (account_issue, project_inaccessible, bug, billing) | `low` (question, other)
+
+**Metadata `quote_request` :** `company`, `service`, `budget`, `configuration` (resume du configurateur)
 
 ### Admin support (`/api/admin/support-tickets`) — Auth + Admin requise
 
@@ -351,6 +412,9 @@ Interface d'administration server-rendered avec Hono JSX SSR, dans le meme Worke
 | POST | /projects/:id/edit | Modifier projet (tous les champs) | Admin |
 | POST | /projects/:id/archive | Archiver projet | Admin |
 | POST | /projects/:id/restore | Restaurer projet archive | Admin |
+| POST | /projects/:id/payments | Demander un paiement (echeance) au client | Admin |
+| GET | /payments?status=&page= | Paiements : stats (CA, CA 30 j, a encaisser, rembourse) + liste filtrable | Admin |
+| POST | /payments/:id/cancel | Annuler une echeance encore payable | Admin |
 | GET | /consent | Liste paginee + KPIs + graphiques (serie temporelle, top pays, categories %) + repartitions (actifs/retires/expires) + filtres (status, method, policy, country, dates) | Admin |
 | GET | /consent/search?consent_id=... | Recherche par consent_id (historique des versions) | Admin |
 | GET | /consent/export?... | Export CSV streaming des consentements filtres | Admin |
@@ -362,8 +426,12 @@ Interface d'administration server-rendered avec Hono JSX SSR, dans le meme Worke
 | GET | /database?tab=tables | Tables explorer: structure, FK, index | Super Admin |
 | GET | /database?tab=query | Interface requete SQL | Super Admin |
 | POST | /database/query | Executer requete SQL | Super Admin |
-| GET | /docs | Documentation API + testeur integre | Admin |
-| GET | /config | Placeholder (bientot disponible) | Admin |
+| GET | /docs | Documentation API + testeur integre | Super Admin (voir note) |
+| GET | /config | Mode maintenance (formulaire) | Super Admin (voir note) |
+
+> Note : `databaseRoutes.use('*', superAdminDashboardMiddleware)` s'applique a toutes les routes `/dashboard/*`
+> enregistrees APRES `databaseRoutes` dans `index.ts` (docs, config). Elles sont donc de fait reservees aux
+> super_admin, alors que la navigation les affiche aux admins. Les routes Paiements sont montees avant : accessibles aux admins.
 
 **Authentification dashboard:**
 - Cookie `dashboard_session` signe HMAC-SHA256 avec `JWT_SECRET`
@@ -429,6 +497,58 @@ Toujours 200 ; le front fail-open (statut inactif) sur erreur reseau.
 laisse passer les admins (via `refreshTokens()`) et les routes `login`/`register`, sinon affiche
 l'ecran d'indisponibilite. Si `ends_at` est defini, l'ecran indique la date de retour ; sinon
 « duree indeterminee ».
+
+## Paiements Stripe
+
+Le site vend ses prestations via un **configurateur** (page de chaque service) : un type de projet
+(`base`) + des modules (`options`) donnent un **prix ferme** ; le client reserve en payant un
+**acompte de 40 %** (CGV art. 4). Le solde (40 % beta, 20 % mise en ligne) est demande par un admin
+sous forme d'**echeances** que le client regle depuis son espace projet.
+
+**Catalogue** : `src/data/catalog.ts` est la SOURCE DE VERITE des prix. Le serveur recalcule toujours le
+total ; le `expected_total` envoye par le front sert uniquement a refuser un ecart d'affichage
+(`409 PRICE_MISMATCH`) plutot que de facturer un autre montant. Le front a un miroir d'affichage
+(`RaceUp.com/src/data/pricing-catalog.ts`) : memes ids, memes prix — toute modification se fait des deux cotes.
+
+**Flux acompte** (`POST /api/payments/checkout`) :
+1. Validation Zod (`accept_terms: true` obligatoire → `terms_accepted_at`), calcul du prix, controle d'ecart.
+2. Reutilisation d'une session encore ouverte (meme user, meme config, < 30 min) : double clic / second onglet.
+3. Client Stripe unique par user et par mode (`stripe_customers`), commande `pending` avec `project_id` **reserve**.
+4. Session Checkout : adresse de facturation + n° TVA (B2B), facture Stripe (`STRIPE_INVOICE_CREATION`,
+   pied « TVA non applicable, art. 293 B du CGI » + SIRET), retour `/{lang}/paiement/confirmation/?session_id=`,
+   annulation → retour au configurateur avec la meme configuration (`?base=&options=&canceled=1`).
+5. Echec Stripe → la commande orpheline est supprimee (`502 PAYMENT_PROVIDER_ERROR`).
+
+**Confirmation (idempotente)** : `syncCheckoutSession()` est appelee par le webhook ET par
+`GET /checkout/:sessionId`. `fulfillOrder()` execute un **batch D1** : `UPDATE orders → paid` conditionnel +
+`INSERT OR IGNORE INTO projects` avec l'id reserve → le projet n'est jamais cree deux fois, quel que soit
+l'ordre d'arrivee (webhook / page de confirmation / rejeu Stripe).
+
+**Statuts** :
+
+| Statut | Signification |
+|--------|---------------|
+| `awaiting_payment` | Echeance demandee par un admin (payable) |
+| `pending` | Session Checkout ouverte (echeance : reste payable, une nouvelle session expire l'ancienne) |
+| `processing` | Paiement differe (SEPA...) en cours de confirmation |
+| `paid` | Paye (acompte : projet cree) |
+| `failed` | Paiement differe refuse (une echeance redevient `awaiting_payment`) |
+| `expired` | Session d'acompte expiree (une echeance redevient `awaiting_payment`) |
+| `refunded` | Remboursement integral constate (`charge.refunded`) |
+| `canceled` | Echeance annulee par un admin |
+
+**Webhook** (`POST /api/payments/webhook`) : `checkout.session.completed`, `checkout.session.async_payment_succeeded`,
+`checkout.session.async_payment_failed`, `checkout.session.expired`, `charge.refunded`. Signature verifiee via
+`constructEventAsync` + SubtleCrypto (corps brut). Une exception renvoie 500 → Stripe re-tente.
+L'expiration n'est appliquee que si la session expiree est la session COURANTE de la commande.
+
+**Securite** : prix recalcule serveur, controle de propriete sur chaque commande, webhook signe, URL de retour
+limitee aux origines officielles (`utils/origins.ts`, pas de `*.pages.dev`), aucun secret journalise.
+Les paiements survivent a la suppression d'un compte (`user_id → NULL`, email/nom conserves) : piece comptable.
+
+**Activation** : sans `STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET`, `GET /config` renvoie `enabled: false`,
+les routes de paiement repondent `503 PAYMENTS_UNAVAILABLE` et le configurateur bascule sur la demande de devis.
+`npm run stripe:setup` cree le webhook Stripe et pose les deux secrets (saisie masquee, rien sur disque).
 
 ## Flux d'authentification
 
@@ -496,3 +616,7 @@ Cela permet aux admins de consulter et gerer tous les projets depuis le dashboar
 | JWT_SECRET | Secret | Cle de signature JWT |
 | CONSENT_SALT | Secret | Sel pour hash SHA-256 des IPs dans `cookie_consents` (min 32 chars aleatoires) |
 | POLICY_VERSION | Env var | Version courante de la politique cookies (ex: `v1.0.0`). Synchronisee avec `NEXT_PUBLIC_POLICY_VERSION` cote frontend |
+| STRIPE_SECRET_KEY | Secret (optionnel) | Cle Stripe (sk_/rk_, live ou test). Absente → paiement en ligne desactive |
+| STRIPE_WEBHOOK_SECRET | Secret (optionnel) | Secret de signature du webhook (whsec_...) |
+| SITE_URL | Env var | URL publique du site (`https://race-up.net`), retour Stripe par defaut |
+| STRIPE_INVOICE_CREATION | Env var | `"true"` : facture Stripe generee pour chaque paiement |

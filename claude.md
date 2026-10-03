@@ -31,11 +31,11 @@ Ce fichier est ta **carte**. Sers-t'en pour aller droit au but au lieu d'explore
 
 ## Stack
 
-- Hono 4.7+, Zod 3.24+ (@hono/zod-validator), TypeScript 5.7+
+- Hono 4.7+, Zod 3.24+ (@hono/zod-validator), TypeScript 5.7+, Stripe SDK 22 (API `2026-03-25.dahlia`, client fetch + SubtleCrypto)
 - Cloudflare Workers (wrangler 4.0+)
 - D1 Database: `RaceUp-User-Data` (SQLite)
 - R2 Bucket: `raceup-project-files`
-- Secrets: `JWT_SECRET` (signature JWT) + `CONSENT_SALT` (hash IP RGPD) — via `wrangler secret put`
+- Secrets: `JWT_SECRET` (signature JWT) + `CONSENT_SALT` (hash IP RGPD) + `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` (optionnels : sans eux paiement désactivé) — via `wrangler secret put` (Stripe : `npm run stripe:setup`)
 
 ## Architecture Fichiers
 
@@ -50,7 +50,10 @@ src/
 │   ├── support.ts        Support ticket endpoint (public POST)
 │   ├── tracking.ts       Page views (public)
 │   ├── consent.ts        Consentement cookies RGPD (post, status, policy, withdraw, my-consents)
-│   └── maintenance.ts    Statut mode maintenance (GET public)
+│   ├── maintenance.ts    Statut mode maintenance (GET public)
+│   └── payments.ts       Paiements Stripe (config, checkout acompte, statut, commandes, échéances, webhook)
+├── data/
+│   └── catalog.ts        Catalogue tarifaire du configurateur — SOURCE DE VÉRITÉ des prix (miroir front : src/data/pricing-catalog.ts)
 ├── dashboard/
 │   ├── styles.ts             CSS template string
 │   ├── session.ts            HMAC cookie sign/verify/middleware
@@ -59,6 +62,7 @@ src/
 │   │   ├── nav.tsx           Sidebar navigation
 │   │   ├── stat-card.tsx     Stat card (value + delta)
 │   │   ├── table.tsx         Reusable DataTable + Pagination
+│   │   ├── payments.tsx      OrdersTable (JSX échappé), badges statut, suggestNextMilestone (40/40/20)
 │   │   └── chart.tsx         SVG BarChart
 │   └── routes/
 │       ├── auth.tsx          Login/logout pages
@@ -66,7 +70,8 @@ src/
 │       ├── logs.tsx          Request logs with filters
 │       ├── errors.tsx        Error list + grouped view
 │       ├── users.tsx         User list, detail, edit profile, role mgmt, delete with confirmation
-│       ├── projects.tsx      Project list (active+archived), detail, edit all fields, archive/restore
+│       ├── projects.tsx      Project list (active+archived), detail (+ paiements + demande d'échéance), edit all fields, archive/restore
+│       ├── payments.tsx      Paiements : stats encaissement, liste filtrable, demande/annulation d'échéance
 │       ├── database.tsx      MPD schema (SVG), tables explorer, SQL query (super_admin)
 │       ├── docs.tsx          API documentation + tester
 │       ├── config.tsx        Placeholder
@@ -88,20 +93,28 @@ src/
 │   ├── cookies.ts        Cookie HttpOnly raceup_session (refresh token)
 │   ├── support.ts        CRUD support tickets (create, list, getById, close)
 │   ├── consent.ts        Consentement RGPD (create, getCurrent, withdraw, list, stats, timeSeries, breakdown, exportCsv, exportJson)
-│   └── maintenance.ts    Etat maintenance (get/set + isMaintenanceActive fenetre horaire)
+│   ├── maintenance.ts    Etat maintenance (get/set + isMaintenanceActive fenetre horaire)
+│   ├── order.ts          CRUD orders + transitions idempotentes (fulfillOrder = batch UPDATE + INSERT OR IGNORE projet) + stats + toPublicOrder
+│   ├── payment.ts        Orchestration Stripe : createDepositCheckout, createMilestoneCheckout, syncCheckoutSession, handleChargeRefunded
+│   └── stripe.ts         getStripe (Workers), constructWebhookEvent, isPaymentsEnabled, getOrCreateStripeCustomer
 ├── validators/
 │   ├── auth.ts           Schemas Zod (register, login, OAuth)
 │   ├── admin.ts          Schemas Zod (projets, role update)
 │   ├── support.ts        Schemas Zod (support ticket creation, filters)
-│   └── consent.ts        Schemas Zod (consent input, withdraw, status query)
+│   ├── consent.ts        Schemas Zod (consent input, withdraw, status query)
+│   └── payments.ts       Schemas Zod paiements + validationHook (erreurs au format standard)
 ├── utils/
-│   └── hash.ts           hashIP (SHA-256 + sel CONSENT_SALT, RGPD) + getClientIP (headers CF)
+│   ├── hash.ts           hashIP (SHA-256 + sel CONSENT_SALT, RGPD) + getClientIP (headers CF)
+│   └── origins.ts        Origines du site : isCorsAllowedOrigin (CORS) + resolveSiteOrigin (retour Stripe)
+scripts/
+└── stripe-setup.mjs      npm run stripe:setup : webhook Stripe + secrets wrangler (saisie masquée)
 db/
 ├── schema.sql            Tables initiales
 └── migrations/           Evolutions schema (appliquees via wrangler d1 execute)
     ├── 006-security-events.sql  Table security_events + index
     ├── 007-cookie-consents.sql  Table cookie_consents (preuve RGPD) + index
-    └── 008-maintenance.sql      Table maintenance_state (mono-ligne, mode maintenance)
+    ├── 008-maintenance.sql      Table maintenance_state (mono-ligne, mode maintenance)
+    └── 009-orders.sql           Tables orders (paiements Stripe) + stripe_customers
 docs/
 ├── architecture.md       Documentation complete (source de verite)
 └── TODO.md               Roadmap
@@ -172,12 +185,27 @@ R2 key: `projects/{projectId}/{uuid}.ext`
 | GET | /projects?status=&page=1&limit=50&archived=0\|1 | Projets avec pagination et filtres |
 | POST | /projects | Cree projet pour un user (user_id, name, service_type, start_date...) |
 | PATCH | /projects/:id | Modifier un projet (tous les attributs editables) |
+| GET | /purchases?status=&page=1&limit=50 | Paiements clients paginés (customer_email inclus) |
+
+### Paiements `/api/payments`
+
+| Method | Route | Auth | Description |
+|--------|-------|------|-------------|
+| GET | /config | - | `{enabled, deposit_rate}` (front : paiement ou devis) |
+| POST | /checkout | JWT | Acompte 40 % (service_type, base, options[], expected_total, lang, accept_terms:true) → `{url, order_id}` |
+| GET | /checkout/:sessionId | JWT | Statut pour la page de confirmation (sync Stripe, proprio ou admin) |
+| GET | /orders?project_id= | JWT | Paiements visibles du user |
+| POST | /orders/:id/checkout | JWT | Régler une échéance → `{url}` |
+| POST | /webhook | Signature Stripe | checkout.session.(completed/async_payment_succeeded/async_payment_failed/expired), charge.refunded |
+
+Erreurs : `PAYMENTS_UNAVAILABLE`(503), `INVALID_CONFIGURATION`(400), `TERMS_NOT_ACCEPTED`(400), `PRICE_MISMATCH`(409), `INVALID_STATE`/`ALREADY_PAID`(409), `PAYMENT_PROVIDER_ERROR`(502), `INVALID_SIGNATURE`(400).
+Prix TOUJOURS recalculés serveur (`data/catalog.ts`). Confirmation idempotente (webhook + page de confirmation). Détail : `docs/architecture.md` § Paiements Stripe.
 
 ### Support `/api/support` (public)
 
 | Method | Route | Auth | Description |
 |--------|-------|------|-------------|
-| POST | / | - | Cree un ticket support (email, name, category, message, metadata?) |
+| POST | / | - | Cree un ticket support (email, name, category, message, metadata?) — catégorie `quote_request` = demande de devis (priorité urgent, metadata company/service/budget/configuration) |
 
 ### Admin Support `/api/admin/support-tickets` (JWT + admin)
 
@@ -238,6 +266,9 @@ R2 key: `projects/{projectId}/{uuid}.ext`
 | POST | /projects/:id/edit | Modifier projet (tous les champs) |
 | POST | /projects/:id/archive | Archiver projet |
 | POST | /projects/:id/restore | Restaurer projet archive |
+| POST | /projects/:id/payments | Demander une échéance au client (libellé + montant, pré-rempli 40/20 %) |
+| GET | /payments | Paiements : stats (CA, 30 j, à encaisser, remboursé) + liste filtrable |
+| POST | /payments/:id/cancel | Annuler une échéance payable |
 | GET | /database?tab=schema | Schema MPD visuel SVG (super_admin only) |
 | GET | /database?tab=tables | Tables explorer + structure + FK + index (super_admin only) |
 | GET | /database?tab=query | Interface requete SQL (super_admin only) |
@@ -306,6 +337,16 @@ cookie_consents (id PK, consent_id, user_id? FK→users SET NULL, ip_hash, user_
 
 maintenance_state (id PK CHECK(id=1), is_enabled[0|1], starts_at?, ends_at?, message?,
                    updated_at?, updated_by?)  -- mono-ligne, mode maintenance du site public
+
+orders (id PK, user_id? FK→users SET NULL, customer_email, customer_name?, project_id?,
+        kind['deposit'|'milestone'], service_type?, config? JSON, description, amount_cents,
+        project_total_cents?, currency, status['awaiting_payment'|'pending'|'processing'|'paid'|
+        'failed'|'expired'|'refunded'|'canceled'], stripe_session_id UNIQUE?, stripe_payment_intent_id?,
+        receipt_url?, lang, terms_accepted_at?, created_by['user'|'admin'], created_at, updated_at,
+        paid_at?, refunded_at?)  -- registre des paiements (survit à la suppression du compte)
+  IDX: session(unique), (user_id, created_at), (status, created_at), project_id, payment_intent
+
+stripe_customers (user_id FK→users CASCADE, livemode[0|1], customer_id UNIQUE, created_at)  PK(user_id, livemode)
 ```
 
 Relations: users 1→N projects 1→N tickets 1→N ticket_messages
@@ -336,6 +377,8 @@ Codes: UNAUTHORIZED(401), FORBIDDEN(403), NOT_FOUND(404), EMAIL_ALREADY_EXISTS(4
 - Cookie: raceup_session, HttpOnly, Secure(prod), SameSite=Lax, domain .raceup.com(prod)
 - Password: PBKDF2-SHA-256, 50K iterations, salt 16 bytes, verify timing-safe
 
+**Paiements**: acompte = commande `pending` avec `project_id` réservé → au paiement, batch D1 (`UPDATE orders` conditionnel + `INSERT OR IGNORE INTO projects`) : jamais de projet en double. Échéance = commande `awaiting_payment` créée par un admin, payable depuis l'espace projet. Statuts et flux : `docs/architecture.md` § Paiements Stripe.
+
 **Consent RGPD**: preuve immuable (jamais de DELETE ; le retrait = marquage `withdrawn_at`). IP hachée SHA-256 + sel (`CONSENT_SALT`), jamais en clair. Consent valide si non retiré + non expiré (~13 mois) + `policy_version` à jour. Bump `POLICY_VERSION` → re-consentement forcé.
 
 ## Config Wrangler
@@ -345,8 +388,9 @@ name = "raceup-backend-api"
 D1: binding=DB, database=RaceUp-User-Data
 R2: binding=R2, bucket=raceup-project-files
 vars: ENVIRONMENT=production, ACCESS_TOKEN_EXPIRY=900, REFRESH_TOKEN_EXPIRY=604800,
-      POLICY_VERSION=v1.0.0, GOOGLE_CLIENT_ID, APPLE_CLIENT_ID
-secrets: JWT_SECRET, CONSENT_SALT (hash IP RGPD) — via wrangler secret put
+      POLICY_VERSION=v1.0.0, GOOGLE_CLIENT_ID, APPLE_CLIENT_ID,
+      SITE_URL=https://race-up.net, STRIPE_INVOICE_CREATION=true
+secrets: JWT_SECRET, CONSENT_SALT (hash IP RGPD), STRIPE_SECRET_KEY + STRIPE_WEBHOOK_SECRET (optionnels) — via wrangler secret put
 ```
 
 ## Commandes
@@ -355,7 +399,8 @@ secrets: JWT_SECRET, CONSENT_SALT (hash IP RGPD) — via wrangler secret put
 npm run dev               # wrangler dev (localhost:8787)
 npm run deploy            # wrangler deploy
 npm run db:setup:local    # init + migrations + seed admin (BDD locale)
-npm run db:migrate:local  # applique les migrations 002→007 en local
+npm run db:migrate:local  # applique les migrations 002→009 en local
+npm run stripe:setup      # active Stripe : webhook + secrets STRIPE_* (clé demandée, saisie masquée)
 npx wrangler d1 execute RaceUp-User-Data --file=db/migrations/xxx.sql  # migration manuelle
 npx wrangler secret put JWT_SECRET    # secret signature JWT
 npx wrangler secret put CONSENT_SALT  # secret hash IP (RGPD)
