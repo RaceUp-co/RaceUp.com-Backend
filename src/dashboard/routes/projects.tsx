@@ -2,6 +2,9 @@ import { Hono } from 'hono';
 import type { AppType } from '../../types';
 import { Layout } from '../layout';
 import { DataTable, Pagination } from '../components/table';
+import { OrdersTable, formatCents, suggestNextMilestone } from '../components/payments';
+import { isOrderPayable, listOrdersByProject } from '../../services/order';
+import { stripeDashboardPaymentUrl } from '../../services/stripe';
 
 const projectsRoutes = new Hono<AppType>();
 
@@ -115,7 +118,7 @@ projectsRoutes.get('/projects/:id', async (c) => {
     );
   }
 
-  const [tickets, files] = await Promise.all([
+  const [tickets, files, orders] = await Promise.all([
     db.prepare(`
       SELECT t.id, t.subject, t.status, t.created_at,
              (SELECT COUNT(*) FROM ticket_messages WHERE ticket_id = t.id) as message_count
@@ -123,9 +126,15 @@ projectsRoutes.get('/projects/:id', async (c) => {
     `).bind(projectId).all(),
     db.prepare('SELECT id, original_filename, file_size, mime_type, created_at FROM project_files WHERE project_id = ? ORDER BY created_at DESC')
       .bind(projectId).all(),
+    listOrdersByProject(db, projectId),
   ]);
 
   const isArchived = Number(project.is_archived) === 1;
+  // Paiements utiles a l'admin : on masque les sessions d'acompte abandonnees
+  const projectOrders = orders.filter((o) => !(o.kind === 'deposit' && (o.status === 'pending' || o.status === 'expired')));
+  const suggestion = suggestNextMilestone(projectOrders);
+  const projectTotal = projectOrders.find((o) => o.project_total_cents)?.project_total_cents ?? null;
+  const paidCents = projectOrders.filter((o) => o.status === 'paid').reduce((sum, o) => sum + o.amount_cents, 0);
 
   return c.html(
     <Layout title={`Projet: ${project.name}`} currentPath="/dashboard/projects" role={session.role}>
@@ -144,6 +153,22 @@ projectsRoutes.get('/projects/:id', async (c) => {
       {msg === 'archived' && (
         <div style="background:#2a2a15;border:1px solid #ff9f43;color:#ff9f43;padding:8px;font-size:12px;margin:12px 0;border-radius:3px;">
           Projet archive.
+        </div>
+      )}
+
+      {msg === 'payment_requested' && (
+        <div style="background:#1a3a1a;border:1px solid #4caf50;color:#4caf50;padding:8px;font-size:12px;margin:12px 0;border-radius:3px;">
+          Demande de paiement creee : le client peut la regler depuis son espace projet.
+        </div>
+      )}
+      {msg === 'payment_canceled' && (
+        <div style="background:#2a2a15;border:1px solid #ff9f43;color:#ff9f43;padding:8px;font-size:12px;margin:12px 0;border-radius:3px;">
+          Echeance annulee.
+        </div>
+      )}
+      {msg === 'payment_invalid' && (
+        <div style="background:#3a1a1a;border:1px solid #ff6b6b;color:#ff6b6b;padding:8px;font-size:12px;margin:12px 0;border-radius:3px;">
+          Demande de paiement invalide (libelle de 3 caracteres minimum, montant entre 1 et 100 000 EUR, projet rattache a un client).
         </div>
       )}
 
@@ -184,8 +209,8 @@ projectsRoutes.get('/projects/:id', async (c) => {
                 <input type="text" name="service_type" value={String(project.service_type)} required />
               </div>
               <div class="form-group">
-                <label>Tier</label>
-                <input type="text" name="tier" value={project.tier ? String(project.tier) : ''} placeholder="Optionnel" />
+                <label>Type de projet (configurateur)</label>
+                <input type="text" name="tier" value={project.tier ? String(project.tier) : ''} placeholder="Optionnel (ex : showcase)" />
               </div>
               <div class="form-group">
                 <label>Statut</label>
@@ -225,6 +250,40 @@ projectsRoutes.get('/projects/:id', async (c) => {
             <button type="submit" class="btn btn-danger">Archiver ce projet</button>
           </form>
         </div>
+      )}
+
+      <h2 class="section-title">Paiements ({projectOrders.length})</h2>
+      {projectTotal !== null && (
+        <p style="color:#707090;font-size:12px;margin-bottom:8px;">
+          Prix total du projet : <strong style="color:#fff;">{formatCents(projectTotal)}</strong> — encaisse :{' '}
+          <strong style="color:#4caf50;">{formatCents(paidCents)}</strong>
+        </p>
+      )}
+      <OrdersTable
+        orders={projectOrders}
+        stripePaymentUrl={(pi) => stripeDashboardPaymentUrl(c.env, pi)}
+        cancelAction={(o) => (isOrderPayable(o) ? `/dashboard/payments/${o.id}/cancel?from=project` : null)}
+      />
+
+      {!isArchived && (
+        <form method="post" action={`/dashboard/projects/${projectId}/payments`} style="max-width:600px;margin-bottom:12px;">
+          <div style="display:grid;grid-template-columns:2fr 1fr;gap:8px;">
+            <div class="form-group">
+              <label>Libelle visible par le client</label>
+              <input type="text" name="description" required minlength={3} maxlength={200}
+                value={suggestion?.label ?? ''} placeholder="Ex : Echeance — validation de la beta (40 %)" />
+            </div>
+            <div class="form-group">
+              <label>Montant (EUR)</label>
+              <input type="text" name="amount" required inputmode="decimal"
+                value={suggestion ? String(suggestion.amountCents / 100) : ''} placeholder="1200" />
+            </div>
+          </div>
+          <button type="submit" class="btn">Demander ce paiement au client</button>
+          <span style="color:#707090;font-size:11px;margin-left:10px;">
+            Le client le voit dans son espace projet et le regle par carte (Stripe).
+          </span>
+        </form>
       )}
 
       <h2 class="section-title">Tickets ({tickets?.results?.length ?? 0})</h2>

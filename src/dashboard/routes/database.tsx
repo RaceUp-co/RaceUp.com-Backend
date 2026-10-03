@@ -139,6 +139,36 @@ const MPD_TABLES: {
       { name: 'closed_at', type: 'TEXT', nullable: true },
     ],
   },
+  {
+    name: 'orders',
+    columns: [
+      { name: 'id', type: 'TEXT', pk: true },
+      { name: 'user_id', type: 'TEXT', fk: 'users.id', nullable: true },
+      { name: 'customer_email', type: 'TEXT' },
+      { name: 'project_id', type: 'TEXT', fk: 'projects.id', nullable: true },
+      { name: 'kind', type: 'TEXT' },
+      { name: 'service_type', type: 'TEXT', nullable: true },
+      { name: 'config', type: 'TEXT', nullable: true },
+      { name: 'description', type: 'TEXT' },
+      { name: 'amount_cents', type: 'INTEGER' },
+      { name: 'project_total_cents', type: 'INTEGER', nullable: true },
+      { name: 'status', type: 'TEXT' },
+      { name: 'stripe_session_id', type: 'TEXT', nullable: true },
+      { name: 'stripe_payment_intent_id', type: 'TEXT', nullable: true },
+      { name: 'receipt_url', type: 'TEXT', nullable: true },
+      { name: 'created_at', type: 'TEXT' },
+      { name: 'paid_at', type: 'TEXT', nullable: true },
+    ],
+  },
+  {
+    name: 'stripe_customers',
+    columns: [
+      { name: 'user_id', type: 'TEXT', pk: true, fk: 'users.id' },
+      { name: 'livemode', type: 'INTEGER', pk: true },
+      { name: 'customer_id', type: 'TEXT' },
+      { name: 'created_at', type: 'TEXT' },
+    ],
+  },
 ];
 
 // Build SVG schema diagram

@@ -75,6 +75,18 @@ const API_REGISTRY: EndpointGroup[] = [
       { method: 'PATCH', path: '/api/admin/users/:id/role', auth: 'JWT+SuperAdmin', description: 'Changer role', body: '{"role":"user|admin|super_admin"}' },
       { method: 'GET', path: '/api/admin/projects', auth: 'JWT+Admin', description: 'Tous les projets' },
       { method: 'POST', path: '/api/admin/projects', auth: 'JWT+Admin', description: 'Creer projet pour un user', body: '{"user_id":"...","name":"...","service_type":"...","start_date":"..."}' },
+      { method: 'GET', path: '/api/admin/purchases?status=&page=1&limit=50', auth: 'JWT+Admin', description: 'Paiements clients (acomptes + echeances)' },
+    ],
+  },
+  {
+    name: 'Payments',
+    endpoints: [
+      { method: 'GET', path: '/api/payments/config', auth: '-', description: 'Paiement en ligne actif ? + taux d\'acompte', response: '{"success":true,"data":{"enabled":true,"deposit_rate":0.4}}' },
+      { method: 'POST', path: '/api/payments/checkout', auth: 'JWT', description: 'Acompte 40 % (configurateur) -> URL Stripe Checkout', body: '{"service_type":"web-development","base":"showcase","options":["seo_plus"],"expected_total":2200,"lang":"fr","accept_terms":true}' },
+      { method: 'GET', path: '/api/payments/checkout/:sessionId', auth: 'JWT', description: 'Etat du paiement (page de confirmation, synchronise avec Stripe)' },
+      { method: 'GET', path: '/api/payments/orders?project_id=', auth: 'JWT', description: 'Paiements de l\'utilisateur courant' },
+      { method: 'POST', path: '/api/payments/orders/:id/checkout', auth: 'JWT', description: 'Regler une echeance -> URL Stripe Checkout' },
+      { method: 'POST', path: '/api/payments/webhook', auth: 'Signature Stripe', description: 'Webhook Stripe (checkout.session.*, charge.refunded)' },
     ],
   },
   {

@@ -22,6 +22,7 @@ import databaseRoutes from './dashboard/routes/database';
 import docsRoutes from './dashboard/routes/docs';
 import configRoutes from './dashboard/routes/config';
 import consentDashRoutes from './dashboard/routes/consent';
+import paymentsDashRoutes from './dashboard/routes/payments';
 
 const app = new Hono<AppType>();
 
@@ -77,6 +78,7 @@ app.route('/dashboard', logsRoutes);
 app.route('/dashboard', errorsRoutes);
 app.route('/dashboard', usersRoutes);
 app.route('/dashboard', projectsDashRoutes);
+app.route('/dashboard', paymentsDashRoutes);
 app.route('/dashboard', databaseRoutes);
 app.route('/dashboard', docsRoutes);
 app.route('/dashboard', configRoutes);
