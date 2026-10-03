@@ -21,6 +21,7 @@ const LOGIN_ERRORS: Record<string, string> = {
 };
 
 function loginErrorCode(message: string | undefined): string {
+  if (message?.startsWith('Trop de tentatives')) return 'rate_limited';
   if (message?.startsWith('Compte OAuth')) return 'oauth';
   if (message?.startsWith('Acces reserve')) return 'forbidden';
   return 'invalid';

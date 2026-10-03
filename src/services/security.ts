@@ -8,6 +8,34 @@ export type SecurityEventType =
   | 'email_changed'
   | 'admin_user_deleted';
 
+// ---------- Verrou anti brute-force (connexion API + dashboard) ----------
+// Les echecs sont journalises avec details = "email=<email> (...)". Le verrou compte les echecs
+// par EMAIL (et non par IP) : il resiste a une attaque distribuee sur plusieurs IP. Les emails
+// inexistants sont comptes de la meme facon, le verrou ne revele donc pas si un compte existe.
+export const LOGIN_MAX_FAILURES = 10;
+export const LOGIN_LOCK_MINUTES = 15;
+
+export function loginFailureDetails(email: string, reason: string): string {
+  return `email=${email} (${reason})`;
+}
+
+export async function isLoginLocked(db: D1Database, email: string): Promise<boolean> {
+  const prefix = `email=${email} (`;
+  const since = new Date(Date.now() - LOGIN_LOCK_MINUTES * 60_000).toISOString();
+  try {
+    const row = await db
+      .prepare(
+        "SELECT COUNT(*) AS n FROM security_events WHERE event_type = 'login_failed' AND created_at > ? AND substr(details, 1, ?) = ?"
+      )
+      .bind(since, prefix.length, prefix)
+      .first<{ n: number }>();
+    return (row?.n ?? 0) >= LOGIN_MAX_FAILURES;
+  } catch {
+    // Table absente (BDD locale non migree) : on ne bloque pas la connexion
+    return false;
+  }
+}
+
 export async function logSecurityEvent(
   db: D1Database,
   event: {

@@ -32,7 +32,12 @@ import {
 import { verifyGoogleToken, verifyAppleToken } from '../services/oauth';
 import { authMiddleware } from '../middleware/auth';
 import { setSessionCookie, getSessionCookie, clearSessionCookie } from '../services/cookies';
-import { logSecurityEvent } from '../services/security';
+import {
+  isLoginLocked,
+  LOGIN_LOCK_MINUTES,
+  logSecurityEvent,
+  loginFailureDetails,
+} from '../services/security';
 
 const auth = new Hono<AppType>();
 
@@ -138,9 +143,24 @@ auth.post('/login', rateLimit('AUTH_RATE_LIMITER', 'login'), zValidator('json', 
 
   const ip = c.req.header('cf-connecting-ip') ?? c.req.header('x-forwarded-for') ?? null;
 
+  // Verrou anti brute-force par email (meme reponse que le compte existe ou non)
+  if (await isLoginLocked(c.env.DB, email)) {
+    return c.json(
+      {
+        success: false,
+        error: {
+          code: 'RATE_LIMITED',
+          message: `Trop de tentatives de connexion. Réessayez dans ${LOGIN_LOCK_MINUTES} minutes.`,
+        },
+      },
+      429
+    );
+  }
+
   const user = await getUserByEmail(c.env.DB, email);
   if (!user) {
-    logSecurityEvent(c.env.DB, { event_type: 'login_failed', ip, details: `email=${email} (not found)` });
+    // await : l'echec doit etre enregistre avant la reponse (il alimente le verrou)
+    await logSecurityEvent(c.env.DB, { event_type: 'login_failed', ip, details: loginFailureDetails(email, 'not found') });
     return c.json(
       {
         success: false,
@@ -169,7 +189,7 @@ auth.post('/login', rateLimit('AUTH_RATE_LIMITER', 'login'), zValidator('json', 
 
   const isValid = await verifyPassword(password, user.password_hash);
   if (!isValid) {
-    logSecurityEvent(c.env.DB, { event_type: 'login_failed', user_id: user.id, ip, details: `email=${email} (wrong password)` });
+    await logSecurityEvent(c.env.DB, { event_type: 'login_failed', user_id: user.id, ip, details: loginFailureDetails(email, 'wrong password') });
     return c.json(
       {
         success: false,

@@ -3,6 +3,7 @@ import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import type { AppType, DashboardSession } from '../types';
 import { getUserByEmail } from '../services/user';
 import { verifyPassword } from '../services/password';
+import { isLoginLocked, logSecurityEvent, loginFailureDetails } from '../services/security';
 
 const COOKIE_NAME = 'dashboard_session';
 const SESSION_DURATION = 7200; // 2 hours in seconds
@@ -128,8 +129,15 @@ export async function authenticateDashboardUser(
   email: string,
   password: string
 ): Promise<{ success: boolean; error?: string; userId?: string; role?: string }> {
+  // Meme verrou anti brute-force que l'API (compteur partage par email)
+  if (await isLoginLocked(c.env.DB, email)) {
+    return { success: false, error: 'Trop de tentatives de connexion.' };
+  }
+
+  const ip = c.req.header('cf-connecting-ip') ?? null;
   const user = await getUserByEmail(c.env.DB, email);
   if (!user) {
+    await logSecurityEvent(c.env.DB, { event_type: 'login_failed', ip, details: loginFailureDetails(email, 'dashboard, not found') });
     return { success: false, error: 'Email ou mot de passe incorrect.' };
   }
 
@@ -139,6 +147,7 @@ export async function authenticateDashboardUser(
 
   const valid = await verifyPassword(password, user.password_hash);
   if (!valid) {
+    await logSecurityEvent(c.env.DB, { event_type: 'login_failed', user_id: user.id, ip, details: loginFailureDetails(email, 'dashboard, wrong password') });
     return { success: false, error: 'Email ou mot de passe incorrect.' };
   }
 
