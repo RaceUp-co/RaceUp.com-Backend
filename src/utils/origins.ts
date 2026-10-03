@@ -8,12 +8,16 @@ const SITE_ORIGINS = [
 
 const LOCALHOST_ORIGIN = /^http:\/\/localhost(:\d+)?$/;
 
-// CORS : origines officielles + previews Cloudflare Pages + localhost (dev).
+// Previews du projet Cloudflare Pages de RaceUp uniquement (raceup-com.pages.dev et ses
+// sous-domaines de preview) — et non n'importe quel site *.pages.dev.
+const PAGES_PREVIEW_ORIGIN = /^https:\/\/([a-z0-9-]+\.)?raceup-com\.pages\.dev$/;
+
+// CORS : origines officielles + previews Pages RaceUp + localhost (dev).
 export function isCorsAllowedOrigin(origin: string | undefined): boolean {
   if (!origin) return false;
   if (SITE_ORIGINS.includes(origin)) return true;
-  if (origin.endsWith('.pages.dev')) return true;
-  if (origin.startsWith('http://localhost')) return true;
+  if (PAGES_PREVIEW_ORIGIN.test(origin)) return true;
+  if (LOCALHOST_ORIGIN.test(origin)) return true;
   return false;
 }
 
