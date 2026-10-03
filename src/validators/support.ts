@@ -9,6 +9,7 @@ const CATEGORIES = [
   'gdpr',
   'question',
   'other',
+  'quote_request', // demande de devis (page contact / configurateur)
 ] as const;
 
 const metadataSchema = z.object({
@@ -19,6 +20,11 @@ const metadataSchema = z.object({
   page_url: z.string().max(500).optional(),
   browser: z.string().max(100).optional(),
   order_number: z.string().max(50).optional(),
+  // Demande de devis
+  company: z.string().max(100).optional(),
+  service: z.string().max(64).optional(),
+  budget: z.string().max(50).optional(),
+  configuration: z.string().max(500).optional(),
 }).optional();
 
 export const createSupportTicketSchema = z.object({

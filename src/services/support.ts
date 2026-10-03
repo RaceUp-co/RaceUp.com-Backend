@@ -5,6 +5,7 @@ const SUPPORT_COLUMNS = 'id, email, name, category, priority, subject, message, 
 const PRIORITY_MAP: Record<string, string> = {
   account_hacked: 'urgent',
   gdpr: 'urgent',
+  quote_request: 'urgent', // prospect : a traiter en priorite
   account_issue: 'normal',
   project_inaccessible: 'normal',
   bug: 'normal',
@@ -22,6 +23,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   gdpr: 'Suppression de données',
   question: 'Question générale',
   other: 'Autre',
+  quote_request: 'Demande de devis',
 };
 
 export async function createSupportTicket(
