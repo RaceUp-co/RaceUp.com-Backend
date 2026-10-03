@@ -1,10 +1,21 @@
 import type { FC } from 'hono/jsx';
-import { html } from 'hono/html';
+import type { HtmlEscapedString } from 'hono/utils/html';
+
+// Contenu d'une cellule. SECURITE : une chaine simple est TOUJOURS echappee (texte).
+// Pour produire du HTML, utiliser le gabarit `html` de hono/html, qui echappe
+// automatiquement chaque valeur interpolee : html`<a href="/x/${id}">${nom}</a>`.
+export type CellContent =
+  | string
+  | number
+  | null
+  | undefined
+  | HtmlEscapedString
+  | Promise<HtmlEscapedString>;
 
 type Column = {
   key: string;
   label: string;
-  render?: (value: unknown, row: Record<string, unknown>) => string;
+  render?: (value: unknown, row: Record<string, unknown>) => CellContent;
 };
 
 type TableProps = {
@@ -20,6 +31,18 @@ type PaginationProps = {
   limit: number;
   queryParams?: string;
 };
+
+// HTML deja echappe (produit par html`` / raw()) : objet String marque isEscaped.
+function isEscapedHtml(value: unknown): value is HtmlEscapedString {
+  return value instanceof String && (value as { isEscaped?: boolean }).isEscaped === true;
+}
+
+function toCell(value: unknown): CellContent {
+  if (isEscapedHtml(value) || typeof value === 'number') return value;
+  // html`` peut renvoyer une promesse (interpolations asynchrones) : rendue par JSX une fois resolue
+  if (value instanceof Promise) return value as Promise<HtmlEscapedString>;
+  return String(value ?? '-');
+}
 
 export const DataTable: FC<TableProps> = ({ columns, rows, rowClass }) => {
   return (
@@ -42,11 +65,7 @@ export const DataTable: FC<TableProps> = ({ columns, rows, rowClass }) => {
           rows.map((row) => (
             <tr class={rowClass ? rowClass(row) : ''}>
               {columns.map((col) => (
-                <td>
-                  {col.render
-                    ? html([col.render(row[col.key], row)] as unknown as TemplateStringsArray)
-                    : String(row[col.key] ?? '-')}
-                </td>
+                <td>{toCell(col.render ? col.render(row[col.key], row) : row[col.key])}</td>
               ))}
             </tr>
           ))

@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { AppType } from '../../types';
 import { Layout } from '../layout';
+import { html } from 'hono/html';
 import { DataTable, Pagination } from '../components/table';
 import { logSecurityEvent } from '../../services/security';
 
@@ -59,9 +60,9 @@ usersRoutes.get('/users', async (c) => {
 
   const roleBadge = (role: unknown) => {
     const r = String(role);
-    if (r === 'super_admin') return '<span class="badge badge-super">super_admin</span>';
-    if (r === 'admin') return '<span class="badge badge-admin">admin</span>';
-    return '<span class="badge badge-user">user</span>';
+    if (r === 'super_admin') return html`<span class="badge badge-super">super_admin</span>`;
+    if (r === 'admin') return html`<span class="badge badge-admin">admin</span>`;
+    return html`<span class="badge badge-user">user</span>`;
   };
 
   return c.html(
@@ -82,7 +83,7 @@ usersRoutes.get('/users', async (c) => {
           {
             key: 'email',
             label: 'Email',
-            render: (v, row) => `<a href="/dashboard/users/${row.id}">${String(v)}</a>`,
+            render: (v, row) => html`<a href="/dashboard/users/${String(row.id)}">${String(v)}</a>`,
           },
           { key: 'username', label: 'Username' },
           { key: 'first_name', label: 'Prenom' },
@@ -227,7 +228,7 @@ usersRoutes.get('/users/:id', async (c) => {
           {
             key: 'name',
             label: 'Nom',
-            render: (v, row) => `<a href="/dashboard/projects/${row.id}">${String(v)}</a>`,
+            render: (v, row) => html`<a href="/dashboard/projects/${String(row.id)}">${String(v)}</a>`,
           },
           { key: 'service_type', label: 'Service' },
           { key: 'status', label: 'Statut' },

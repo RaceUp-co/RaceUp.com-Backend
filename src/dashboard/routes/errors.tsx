@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { AppType } from '../../types';
 import { Layout } from '../layout';
+import { html } from 'hono/html';
 import { DataTable, Pagination } from '../components/table';
 
 const errorsRoutes = new Hono<AppType>();
@@ -74,7 +75,7 @@ errorsRoutes.get('/errors', async (c) => {
           {
             key: 'user_id',
             label: 'User',
-            render: (v) => v ? `<a href="/dashboard/users/${v}">${String(v).substring(0, 8)}...</a>` : '-',
+            render: (v) => v ? html`<a href="/dashboard/users/${String(v)}">${String(v).substring(0, 8)}...</a>` : '-',
           },
         ]}
         rows={(errorsResult?.results ?? []) as Record<string, unknown>[]}

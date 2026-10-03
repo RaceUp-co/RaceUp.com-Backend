@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { AppType } from '../../types';
 import { Layout } from '../layout';
+import { html } from 'hono/html';
 import { DataTable, Pagination } from '../components/table';
 
 const logsRoutes = new Hono<AppType>();
@@ -78,7 +79,7 @@ logsRoutes.get('/logs', async (c) => {
           {
             key: 'user_id',
             label: 'User',
-            render: (v) => v ? `<a href="/dashboard/users/${v}">${String(v).substring(0, 8)}...</a>` : '-',
+            render: (v) => v ? html`<a href="/dashboard/users/${String(v)}">${String(v).substring(0, 8)}...</a>` : '-',
           },
           { key: 'country', label: 'Pays' },
           { key: 'ip', label: 'IP' },

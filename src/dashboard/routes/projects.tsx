@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { AppType } from '../../types';
 import { Layout } from '../layout';
+import { html } from 'hono/html';
 import { DataTable, Pagination } from '../components/table';
 import { OrdersTable, formatCents, suggestNextMilestone } from '../components/payments';
 import { isOrderPayable, listOrdersByProject } from '../../services/order';
@@ -48,9 +49,9 @@ projectsRoutes.get('/projects', async (c) => {
 
   const statusBadge = (s: unknown) => {
     const v = String(s);
-    if (v === 'completed') return '<span class="badge badge-ok">Termine</span>';
-    if (v === 'paused') return '<span class="badge" style="background:#ff9f4322;color:#ff9f43;">En pause</span>';
-    return '<span class="badge badge-admin">En cours</span>';
+    if (v === 'completed') return html`<span class="badge badge-ok">Termine</span>`;
+    if (v === 'paused') return html`<span class="badge" style="background:#ff9f4322;color:#ff9f43;">En pause</span>`;
+    return html`<span class="badge badge-admin">En cours</span>`;
   };
 
   return c.html(
@@ -78,7 +79,7 @@ projectsRoutes.get('/projects', async (c) => {
           {
             key: 'name',
             label: 'Nom',
-            render: (v, row) => `<a href="/dashboard/projects/${row.id}">${String(v)}</a>`,
+            render: (v, row) => html`<a href="/dashboard/projects/${String(row.id)}">${String(v)}</a>`,
           },
           { key: 'user_email', label: 'Client' },
           { key: 'service_type', label: 'Service' },
