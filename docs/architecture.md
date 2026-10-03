@@ -591,6 +591,7 @@ Cela permet aux admins de consulter et gerer tous les projets depuis le dashboar
 | CORS | Origines du site (`race-up.net`, `raceup.com`, www), previews `*.raceup-com.pages.dev`, `http://localhost[:port]` (regex stricte : `localhost.attaquant.com` refuse) — `utils/origins.ts` |
 | Rate limiting | Workers Rate Limiting par IP (`middleware/rate-limit.ts`) : `AUTH_RATE_LIMITER` 10/min (register, login, OAuth, suppression de compte, login dashboard, paiements), `FORMS_RATE_LIMITER` 5/min (support / devis) → `429 RATE_LIMITED` |
 | XSS dashboard | Cellules echappees par defaut, HTML uniquement via `html\`\`` (auto-echappement) |
+| Verrou de connexion | 10 echecs par EMAIL sur 15 min → `429` (API + dashboard, compteur partage via `security_events`, quelle que soit l'IP ; emails inexistants comptes de la meme facon = pas d'enumeration). Le limiteur par IP de Cloudflare est approximatif sur les rafales courtes, ce verrou est deterministe |
 | Upload validation | MIME type + taille verifie cote serveur (non-admin) |
 | IDs | UUID v4 non predictibles (`crypto.randomUUID()`) |
 | Security audit | Logging des login, suppressions, changements de role dans `security_events` |

@@ -378,6 +378,8 @@ Codes: UNAUTHORIZED(401), FORBIDDEN(403), NOT_FOUND(404), EMAIL_ALREADY_EXISTS(4
 - Cookie: raceup_session, HttpOnly, Secure(prod), SameSite=Lax, domain .raceup.com(prod)
 - Password: PBKDF2-SHA-256, 50K iterations, salt 16 bytes, verify timing-safe
 
+**Anti brute-force**: limiteur par IP (Workers Rate Limiting, approximatif) + verrou déterministe par email : 10 échecs / 15 min → 429 (`isLoginLocked`, services/security.ts), partagé API + dashboard. Les échecs de login sont journalisés avec `await` (alimentent le verrou).
+
 **Dashboard anti-XSS**: `DataTable` échappe toute chaîne ; HTML dans une cellule UNIQUEMENT via `html\`...\`` (hono/html, auto-échappement). Jamais de HTML par concaténation (noms de projets, erreurs journalisées, consent_id = données tierces). Login dashboard : `?error=` = codes connus seulement.
 
 **Paiements**: acompte = commande `pending` avec `project_id` réservé → au paiement, batch D1 (`UPDATE orders` conditionnel + `INSERT OR IGNORE INTO projects`) : jamais de projet en double. Échéance = commande `awaiting_payment` créée par un admin, payable depuis l'espace projet. Statuts et flux : `docs/architecture.md` § Paiements Stripe.
