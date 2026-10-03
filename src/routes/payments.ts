@@ -4,6 +4,7 @@ import { zValidator } from '@hono/zod-validator';
 import type Stripe from 'stripe';
 import type { AppType } from '../types';
 import { authMiddleware } from '../middleware/auth';
+import { rateLimit } from '../middleware/rate-limit';
 import { getUserById } from '../services/user';
 import { DEPOSIT_RATE } from '../data/catalog';
 import { constructWebhookEvent, getStripe, isPaymentsEnabled } from '../services/stripe';
@@ -86,6 +87,7 @@ payments.post('/webhook', async (c) => {
 payments.post(
   '/checkout',
   authMiddleware,
+  rateLimit('AUTH_RATE_LIMITER', 'checkout'),
   zValidator('json', depositCheckoutSchema, validationHook),
   async (c) => {
     const stripe = getStripe(c.env);
@@ -120,7 +122,7 @@ payments.get('/checkout/:sessionId', authMiddleware, async (c) => {
   const notFound = () =>
     c.json({ success: false, error: { code: 'NOT_FOUND', message: 'Paiement introuvable.' } }, 404);
 
-  const sessionId = c.req.param('sessionId');
+  const sessionId = c.req.param('sessionId') ?? '';
   if (!/^cs_(test|live)_[A-Za-z0-9]+$/.test(sessionId)) return notFound();
 
   const session = await stripe.checkout.sessions.retrieve(sessionId).catch(() => null);
@@ -143,14 +145,14 @@ payments.get('/orders', authMiddleware, zValidator('query', ordersQuerySchema, v
 });
 
 // POST /api/payments/orders/:id/checkout — regler une echeance demandee par RaceUp (JWT, proprietaire)
-payments.post('/orders/:id/checkout', authMiddleware, async (c) => {
+payments.post('/orders/:id/checkout', authMiddleware, rateLimit('AUTH_RATE_LIMITER', 'checkout'), async (c) => {
   const stripe = getStripe(c.env);
   if (!stripe || !isPaymentsEnabled(c.env)) return paymentsUnavailable(c);
 
   const user = await getUserById(c.env.DB, c.get('jwtPayload').sub);
   if (!user) return c.json({ success: false, error: { code: 'UNAUTHORIZED', message: 'Utilisateur introuvable.' } }, 401);
 
-  const order = await getOrderById(c.env.DB, c.req.param('id'));
+  const order = await getOrderById(c.env.DB, c.req.param('id') ?? '');
   if (!order || order.user_id !== user.id) {
     return c.json({ success: false, error: { code: 'NOT_FOUND', message: 'Paiement introuvable.' } }, 404);
   }

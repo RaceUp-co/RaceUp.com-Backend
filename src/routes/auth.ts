@@ -10,6 +10,7 @@ import {
   appleAuthSchema,
 } from '../validators/auth';
 import { hashPassword, verifyPassword } from '../services/password';
+import { rateLimit } from '../middleware/rate-limit';
 import {
   generateAccessToken,
   generateRefreshToken,
@@ -63,7 +64,7 @@ async function generateTokensForUser(
 }
 
 // POST /register
-auth.post('/register', zValidator('json', registerSchema), async (c) => {
+auth.post('/register', rateLimit('AUTH_RATE_LIMITER', 'register'), zValidator('json', registerSchema), async (c) => {
   const { email, password, username, first_name, last_name, birth_date } = c.req.valid('json');
 
   const existingEmail = await getUserByEmail(c.env.DB, email);
@@ -132,7 +133,7 @@ auth.post('/register', zValidator('json', registerSchema), async (c) => {
 });
 
 // POST /login
-auth.post('/login', zValidator('json', loginSchema), async (c) => {
+auth.post('/login', rateLimit('AUTH_RATE_LIMITER', 'login'), zValidator('json', loginSchema), async (c) => {
   const { email, password } = c.req.valid('json');
 
   const ip = c.req.header('cf-connecting-ip') ?? c.req.header('x-forwarded-for') ?? null;
@@ -208,7 +209,7 @@ auth.post('/login', zValidator('json', loginSchema), async (c) => {
 });
 
 // POST /google - Connexion/inscription via Google
-auth.post('/google', zValidator('json', googleAuthSchema), async (c) => {
+auth.post('/google', rateLimit('AUTH_RATE_LIMITER', 'oauth'), zValidator('json', googleAuthSchema), async (c) => {
   const { access_token } = c.req.valid('json');
 
   const googleUser = await verifyGoogleToken(access_token);
@@ -256,7 +257,7 @@ auth.post('/google', zValidator('json', googleAuthSchema), async (c) => {
 });
 
 // POST /apple - Connexion/inscription via Apple
-auth.post('/apple', zValidator('json', appleAuthSchema), async (c) => {
+auth.post('/apple', rateLimit('AUTH_RATE_LIMITER', 'oauth'), zValidator('json', appleAuthSchema), async (c) => {
   const { id_token, first_name, last_name } = c.req.valid('json');
 
   const applePayload = await verifyAppleToken(id_token, c.env.APPLE_CLIENT_ID);
@@ -490,6 +491,7 @@ auth.post('/logout', authMiddleware, async (c) => {
 auth.delete(
   '/account',
   authMiddleware,
+  rateLimit('AUTH_RATE_LIMITER', 'account-delete'),
   zValidator('json', deleteAccountSchema),
   async (c) => {
     const payload = c.get('jwtPayload');

@@ -3,11 +3,12 @@ import { zValidator } from '@hono/zod-validator';
 import type { AppType } from '../types';
 import { createSupportTicketSchema } from '../validators/support';
 import { createSupportTicket } from '../services/support';
+import { rateLimit } from '../middleware/rate-limit';
 
 const support = new Hono<AppType>();
 
 // POST /api/support — Créer un ticket (public)
-support.post('/', zValidator('json', createSupportTicketSchema), async (c) => {
+support.post('/', rateLimit('FORMS_RATE_LIMITER', 'support'), zValidator('json', createSupportTicketSchema), async (c) => {
   const { email, name, category, message, metadata } = c.req.valid('json');
 
   const ticket = await createSupportTicket(

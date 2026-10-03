@@ -17,7 +17,17 @@ export type Bindings = {
   STRIPE_WEBHOOK_SECRET?: string;
   SITE_URL: string; // URL publique du site (retour de Stripe Checkout)
   STRIPE_INVOICE_CREATION?: string; // "true" = facture Stripe generee pour chaque paiement
+  // Limitation de debit (Workers Rate Limiting) — optionnels : absents en dev/tests
+  AUTH_RATE_LIMITER?: RateLimiter;
+  FORMS_RATE_LIMITER?: RateLimiter;
 };
+
+// Binding Workers Rate Limiting (type minimal, independant de la version de workers-types)
+export type RateLimiter = {
+  limit(options: { key: string }): Promise<{ success: boolean }>;
+};
+
+export type RateLimiterName = 'AUTH_RATE_LIMITER' | 'FORMS_RATE_LIMITER';
 
 export type Variables = {
   jwtPayload: {
