@@ -6,7 +6,10 @@ import { superAdminDashboardMiddleware } from '../session';
 
 const databaseRoutes = new Hono<AppType>();
 
-databaseRoutes.use('*', superAdminDashboardMiddleware);
+// Reserve aux super_admin. Limite explicitement a /database : avec '*', le middleware
+// s'appliquait aussi a toutes les routes /dashboard/* montees apres (docs, config...).
+databaseRoutes.use('/database', superAdminDashboardMiddleware);
+databaseRoutes.use('/database/*', superAdminDashboardMiddleware);
 
 // Schema MPD data — describes the physical database model
 const MPD_TABLES: {
