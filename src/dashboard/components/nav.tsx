@@ -13,6 +13,7 @@ export const Nav: FC<NavProps> = ({ currentPath, role }) => {
     { href: '/dashboard/users', label: 'Utilisateurs' },
     { href: '/dashboard/projects', label: 'Projets' },
     { href: '/dashboard/payments', label: 'Paiements' },
+    { href: '/dashboard/emails', label: 'Emails' },
     { href: '/dashboard/consent', label: 'Consentement' },
     ...(role === 'super_admin'
       ? [{ href: '/dashboard/database', label: 'Base de donnees' }]

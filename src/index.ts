@@ -7,6 +7,7 @@ import projectRoutes from './routes/projects';
 import trackingRoutes from './routes/tracking';
 import consentRoutes from './routes/consent';
 import supportRoutes from './routes/support';
+import emailRoutes from './routes/emails';
 import maintenanceRoutes from './routes/maintenance';
 import paymentRoutes from './routes/payments';
 import { loggerMiddleware } from './middleware/logger';
@@ -21,6 +22,7 @@ import projectsDashRoutes from './dashboard/routes/projects';
 import databaseRoutes from './dashboard/routes/database';
 import docsRoutes from './dashboard/routes/docs';
 import configRoutes from './dashboard/routes/config';
+import emailsDashRoutes from './dashboard/routes/emails';
 import consentDashRoutes from './dashboard/routes/consent';
 import paymentsDashRoutes from './dashboard/routes/payments';
 
@@ -63,6 +65,7 @@ app.route('/api/projects', projectRoutes);
 app.route('/api/track', trackingRoutes);
 app.route('/api/consent', consentRoutes);
 app.route('/api/support', supportRoutes);
+app.route('/api/emails', emailRoutes);
 app.route('/api/maintenance', maintenanceRoutes);
 app.route('/api/payments', paymentRoutes);
 
@@ -82,6 +85,7 @@ app.route('/dashboard', paymentsDashRoutes);
 app.route('/dashboard', databaseRoutes);
 app.route('/dashboard', docsRoutes);
 app.route('/dashboard', configRoutes);
+app.route('/dashboard', emailsDashRoutes);
 app.route('/', consentDashRoutes);
 
 // Global error handler
