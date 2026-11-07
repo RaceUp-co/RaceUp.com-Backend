@@ -6,6 +6,9 @@ import { DataTable, Pagination } from '../components/table';
 import { OrdersTable, formatCents, suggestNextMilestone } from '../components/payments';
 import { isOrderPayable, listOrdersByProject } from '../../services/order';
 import { stripeDashboardPaymentUrl } from '../../services/stripe';
+import { notifyProjectCompleted } from '../../services/notify';
+import { background } from '../../utils/background';
+import { getUserById } from '../../services/user';
 
 const projectsRoutes = new Hono<AppType>();
 
@@ -317,7 +320,11 @@ projectsRoutes.post('/projects/:id/edit', async (c) => {
   const db = c.env.DB;
   const projectId = c.req.param('id');
 
-  const project = await db.prepare('SELECT id FROM projects WHERE id = ?').bind(projectId).first();
+  // Statut lu AVANT la mise a jour : l'email ne part qu'a la transition vers « termine ».
+  const project = await db
+    .prepare('SELECT id, user_id, name, status FROM projects WHERE id = ?')
+    .bind(projectId)
+    .first<{ id: string; user_id: string | null; name: string; status: string }>();
   if (!project) return c.redirect('/dashboard/projects');
 
   const body = await c.req.parseBody();
@@ -342,6 +349,17 @@ projectsRoutes.post('/projects/:id/edit', async (c) => {
         start_date = ?, end_date = ?, deliverables_url = ?, last_update = ?, updated_at = ?
     WHERE id = ?
   `).bind(name, description, serviceType, tier, status, progress, startDate, endDate, deliverablesUrl, now, now, projectId).run();
+
+  if (status === 'completed' && project.status !== 'completed' && project.user_id) {
+    background(
+      c,
+      (async () => {
+        const owner = await getUserById(db, project.user_id as string);
+        if (!owner) return;
+        await notifyProjectCompleted(c.env, owner, { id: project.id, name: project.name }, 'fr');
+      })().catch((err) => console.error('project completed email failed', err))
+    );
+  }
 
   return c.redirect(`/dashboard/projects/${projectId}?msg=updated`);
 });

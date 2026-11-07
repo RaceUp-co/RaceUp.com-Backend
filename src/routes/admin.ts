@@ -36,7 +36,7 @@ import {
 import { consentFiltersSchema } from '../validators/consent';
 import { adminPurchasesQuerySchema, validationHook } from '../validators/payments';
 import { listOrdersAdmin, toPublicOrder } from '../services/order';
-import { notifyProjectCreated, notifySupportClosed } from '../services/notify';
+import { notifyProjectCompleted, notifyProjectCreated, notifySupportClosed } from '../services/notify';
 import { background } from '../utils/background';
 
 const admin = new Hono<AppType>();
@@ -314,7 +314,12 @@ admin.get('/purchases', zValidator('query', adminPurchasesQuerySchema, validatio
 // PATCH /projects/:id — Modifier un projet (admin)
 admin.patch('/projects/:id', async (c) => {
   const projectId = c.req.param('id');
-  const project = await c.env.DB.prepare('SELECT id FROM projects WHERE id = ?').bind(projectId).first();
+  // On lit le statut AVANT la mise a jour : l'email « projet termine » ne doit partir
+  // qu'a la transition, pas a chaque enregistrement d'un projet deja termine.
+  const project = await c.env.DB
+    .prepare('SELECT id, user_id, name, status FROM projects WHERE id = ?')
+    .bind(projectId)
+    .first<{ id: string; user_id: string | null; name: string; status: string }>();
 
   if (!project) {
     return c.json({ success: false, error: { code: 'NOT_FOUND', message: 'Projet introuvable.' } }, 404);
@@ -364,6 +369,18 @@ admin.patch('/projects/:id', async (c) => {
     .bind(...values).run();
 
   const updated = await c.env.DB.prepare('SELECT * FROM projects WHERE id = ?').bind(projectId).first();
+
+  if (body.status === 'completed' && project.status !== 'completed' && project.user_id) {
+    background(
+      c,
+      (async () => {
+        const owner = await getUserById(c.env.DB, project.user_id as string);
+        if (!owner) return;
+        await notifyProjectCompleted(c.env, owner, { id: project.id, name: project.name }, 'fr');
+      })().catch((err) => console.error('project completed email failed', err))
+    );
+  }
+
   return c.json({ success: true, data: { project: updated } });
 });
 
