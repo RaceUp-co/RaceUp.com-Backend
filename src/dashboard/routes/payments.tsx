@@ -14,6 +14,8 @@ import {
   listOrdersByProject,
 } from '../../services/order';
 import { isPaymentsEnabled, isStripeLiveMode, stripeDashboardPaymentUrl } from '../../services/stripe';
+import { notifyMilestoneRequested } from '../../services/notify';
+import { background } from '../../utils/background';
 
 const paymentsRoutes = new Hono<AppType>();
 
@@ -120,7 +122,7 @@ paymentsRoutes.post('/payments/:id/cancel', async (c) => {
 paymentsRoutes.post('/projects/:id/payments', async (c) => {
   const projectId = c.req.param('id');
   const project = await c.env.DB.prepare(
-    `SELECT p.id, p.user_id, p.service_type, u.email, u.first_name, u.last_name
+    `SELECT p.id, p.user_id, p.name, p.service_type, u.email, u.first_name, u.last_name
      FROM projects p LEFT JOIN users u ON u.id = p.user_id
      WHERE p.id = ? AND p.is_archived = 0`
   )
@@ -128,6 +130,7 @@ paymentsRoutes.post('/projects/:id/payments', async (c) => {
     .first<{
       id: string;
       user_id: string | null;
+      name: string;
       service_type: string;
       email: string | null;
       first_name: string | null;
@@ -151,7 +154,7 @@ paymentsRoutes.post('/projects/:id/payments', async (c) => {
   const deposit = existing.find((o) => o.kind === 'deposit' && o.status === 'paid');
   const name = `${project.first_name ?? ''} ${project.last_name ?? ''}`.trim();
 
-  await createOrder(c.env.DB, {
+  const order = await createOrder(c.env.DB, {
     user_id: project.user_id,
     customer_email: project.email,
     customer_name: name || null,
@@ -167,6 +170,15 @@ paymentsRoutes.post('/projects/:id/payments', async (c) => {
     terms_accepted_at: null,
     created_by: 'admin',
   });
+
+  // Sans cet email, l'echeance n'etait visible que si le client pensait a aller
+  // regarder son espace projet (cf. docs/TODO.md).
+  background(
+    c,
+    notifyMilestoneRequested(c.env, order, project.name).catch((err) =>
+      console.error('milestone email failed', err)
+    )
+  );
 
   return c.redirect(`/dashboard/projects/${projectId}?msg=payment_requested`);
 });

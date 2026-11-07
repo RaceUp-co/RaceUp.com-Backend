@@ -207,14 +207,15 @@ export async function markOrderProcessing(
   db: D1Database,
   orderId: string,
   paymentIntentId: string | null
-): Promise<void> {
-  await db
+): Promise<boolean> {
+  const result = await db
     .prepare(
       `UPDATE orders SET status = 'processing', stripe_payment_intent_id = COALESCE(?, stripe_payment_intent_id), updated_at = ?
        WHERE id = ? AND status IN ('awaiting_payment', 'pending')`
     )
     .bind(paymentIntentId, new Date().toISOString(), orderId)
     .run();
+  return (result.meta?.changes ?? 0) > 0;
 }
 
 // Confirme le paiement. Appelee par le webhook ET par la page de confirmation : le premier
@@ -278,9 +279,9 @@ export async function setOrderReceiptUrl(db: D1Database, orderId: string, receip
 }
 
 // Echec d'un paiement differe : un acompte echoue definitivement, une echeance redevient payable.
-export async function markOrderFailed(db: D1Database, order: Order): Promise<void> {
+export async function markOrderFailed(db: D1Database, order: Order): Promise<boolean> {
   const next: OrderStatus = order.kind === 'milestone' ? 'awaiting_payment' : 'failed';
-  await db
+  const result = await db
     .prepare(
       `UPDATE orders SET status = ?, updated_at = ?,
          stripe_session_id = CASE WHEN ? = 'awaiting_payment' THEN NULL ELSE stripe_session_id END
@@ -288,6 +289,7 @@ export async function markOrderFailed(db: D1Database, order: Order): Promise<voi
     )
     .bind(next, new Date().toISOString(), next, order.id)
     .run();
+  return (result.meta?.changes ?? 0) > 0;
 }
 
 // Session Checkout expiree. Seulement si c'est bien la session COURANTE de la commande
@@ -311,15 +313,29 @@ export async function markOrderExpired(db: D1Database, order: Order, sessionId: 
 }
 
 // Remboursement integral constate par Stripe (charge.refunded).
-export async function markOrderRefundedByPaymentIntent(db: D1Database, paymentIntentId: string): Promise<void> {
+// Renvoie la commande remboursee si la transition a eu lieu, sinon null (remboursement
+// deja enregistre) : l'appelant s'en sert pour n'envoyer l'email qu'une seule fois.
+export async function markOrderRefundedByPaymentIntent(
+  db: D1Database,
+  paymentIntentId: string
+): Promise<Order | null> {
   const now = new Date().toISOString();
-  await db
+  const result = await db
     .prepare(
       `UPDATE orders SET status = 'refunded', refunded_at = ?, updated_at = ?
        WHERE stripe_payment_intent_id = ? AND status = 'paid'`
     )
     .bind(now, now, paymentIntentId)
     .run();
+
+  if ((result.meta?.changes ?? 0) === 0) return null;
+
+  return (
+    (await db
+      .prepare(`SELECT ${ORDER_COLUMNS} FROM orders WHERE stripe_payment_intent_id = ?`)
+      .bind(paymentIntentId)
+      .first<Order>()) ?? null
+  );
 }
 
 // Annulation d'une echeance par un admin (jamais un paiement deja regle).

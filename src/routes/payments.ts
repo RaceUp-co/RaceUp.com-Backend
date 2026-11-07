@@ -34,6 +34,23 @@ function isAdminRole(role: string): boolean {
   return role === 'admin' || role === 'super_admin';
 }
 
+// On ne facture jamais une adresse injoignable : la facture, le recu et toutes les
+// notifications de la commande y sont envoyes. La verification d'email est volontairement
+// non bloquante PARTOUT AILLEURS (le compte fonctionne sans) — sauf ici.
+function emailNotVerified(c: Context<AppType>) {
+  return c.json(
+    {
+      success: false,
+      error: {
+        code: 'EMAIL_NOT_VERIFIED',
+        message:
+          'Confirmez votre adresse email avant de payer : c’est à cette adresse que partent votre facture et le suivi de votre commande.',
+      },
+    },
+    403
+  );
+}
+
 // GET /api/payments/config — public : le front adapte le configurateur (paiement ou devis)
 payments.get('/config', (c) => {
   c.header('Cache-Control', 'public, max-age=300');
@@ -95,6 +112,7 @@ payments.post(
 
     const user = await getUserById(c.env.DB, c.get('jwtPayload').sub);
     if (!user) return c.json({ success: false, error: { code: 'UNAUTHORIZED', message: 'Utilisateur introuvable.' } }, 401);
+    if (!user.email_verified_at) return emailNotVerified(c);
 
     const result = await createDepositCheckout(
       c.env,
@@ -151,6 +169,8 @@ payments.post('/orders/:id/checkout', authMiddleware, rateLimit('AUTH_RATE_LIMIT
 
   const user = await getUserById(c.env.DB, c.get('jwtPayload').sub);
   if (!user) return c.json({ success: false, error: { code: 'UNAUTHORIZED', message: 'Utilisateur introuvable.' } }, 401);
+
+  if (!user.email_verified_at) return emailNotVerified(c);
 
   const order = await getOrderById(c.env.DB, c.req.param('id') ?? '');
   if (!order || order.user_id !== user.id) {

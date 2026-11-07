@@ -20,6 +20,15 @@ import {
   setOrderReceiptUrl,
 } from './order';
 import { getOrCreateStripeCustomer } from './stripe';
+import { formatEuros } from '../utils/money';
+import {
+  notifyOrderFailed,
+  notifyOrderPaid,
+  notifyOrderProcessing,
+  notifyOrderRefunded,
+} from './notify';
+
+export { formatEuros };
 
 // Orchestration Stripe Checkout : creation des sessions (acompte du configurateur,
 // echeances) et synchronisation de l'etat des commandes (webhook + page de confirmation).
@@ -49,14 +58,6 @@ const TEXTS = {
   },
 } as const;
 
-export function formatEuros(cents: number, lang: Lang): string {
-  return new Intl.NumberFormat(lang === 'fr' ? 'fr-FR' : 'en-GB', {
-    style: 'currency',
-    currency: 'EUR',
-    minimumFractionDigits: cents % 100 === 0 ? 0 : 2,
-    maximumFractionDigits: 2,
-  }).format(cents / 100);
-}
 
 function fullName(user: Pick<User, 'first_name' | 'last_name'>): string {
   return `${user.first_name ?? ''} ${user.last_name ?? ''}`.trim();
@@ -342,27 +343,42 @@ export async function syncCheckoutSession(
   const paymentIntentId =
     typeof session.payment_intent === 'string' ? session.payment_intent : session.payment_intent?.id ?? null;
 
+  // Les emails sont conditionnes a la REUSSITE de la transition en base (changes > 0) :
+  // le webhook Stripe et la page de confirmation appellent cette fonction en parallele,
+  // et Stripe rejoue ses evenements pendant 3 jours. Sans ce garde-fou, le client
+  // recevrait plusieurs fois le meme recu.
+  let notify: ((fresh: Order) => Promise<void>) | null = null;
+
   if (options.asyncFailed) {
-    await markOrderFailed(env.DB, order);
+    if (await markOrderFailed(env.DB, order)) notify = (fresh) => notifyOrderFailed(env, fresh);
   } else if (session.payment_status === 'paid' || session.payment_status === 'no_payment_required') {
     if (order.status !== 'paid' && order.status !== 'refunded') {
       const receiptUrl = await findReceiptUrl(stripe, session.id);
-      await fulfillOrder(env.DB, order, {
+      const { fulfilled } = await fulfillOrder(env.DB, order, {
         paymentIntentId,
         receiptUrl,
         project: order.kind === 'deposit' ? buildDepositProject(order) : null,
       });
+      if (fulfilled) notify = (fresh) => notifyOrderPaid(env, fresh);
     } else if (!order.receipt_url) {
       const receiptUrl = await findReceiptUrl(stripe, session.id);
       if (receiptUrl) await setOrderReceiptUrl(env.DB, order.id, receiptUrl);
     }
   } else if (session.status === 'complete') {
-    await markOrderProcessing(env.DB, order.id, paymentIntentId);
+    if (await markOrderProcessing(env.DB, order.id, paymentIntentId)) {
+      notify = (fresh) => notifyOrderProcessing(env, fresh);
+    }
   } else if (session.status === 'expired') {
+    // Session abandonnee : pas d'email, cela n'a aucune valeur pour le client.
     await markOrderExpired(env.DB, order, session.id);
   }
 
-  return getOrderById(env.DB, orderId);
+  const updated = await getOrderById(env.DB, orderId);
+
+  // L'email part avec la commande A JOUR (statut, facture, date de paiement).
+  if (notify && updated) await notify(updated);
+
+  return updated;
 }
 
 // Remboursement integral (charge.refunded). Un remboursement partiel ne change pas le statut.
@@ -370,5 +386,9 @@ export async function handleChargeRefunded(env: Bindings, charge: Stripe.Charge)
   if (!charge.refunded) return;
   const paymentIntentId =
     typeof charge.payment_intent === 'string' ? charge.payment_intent : charge.payment_intent?.id ?? null;
-  if (paymentIntentId) await markOrderRefundedByPaymentIntent(env.DB, paymentIntentId);
+  if (!paymentIntentId) return;
+
+  // Renvoie la commande seulement si elle vient de passer a 'refunded' -> un seul email.
+  const refunded = await markOrderRefundedByPaymentIntent(env.DB, paymentIntentId);
+  if (refunded) await notifyOrderRefunded(env, refunded);
 }
