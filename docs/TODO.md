@@ -2,25 +2,25 @@
 
 ## En cours
 
-- [ ] Deployer en production sur Cloudflare Workers
-  - [ ] Creer la base D1 distante (`wrangler d1 create raceup-db`)
-  - [ ] Reporter le `database_id` dans `wrangler.toml`
-  - [ ] Configurer le secret JWT (`wrangler secret put JWT_SECRET`)
-  - [ ] Initialiser le schema distant (`npm run db:init:remote`)
-  - [ ] Appliquer la migration security_events (`npx wrangler d1 execute RaceUp-User-Data --file=db/migrations/006-security-events.sql`)
-  - [ ] Deployer (`npm run deploy`)
+- [ ] Redeployer l'API apres le module emails (`npm run deploy`). Le code et la migration 010
+      sont prets, et les secrets `RESEND_API_KEY`, `RESEND_WEBHOOK_SECRET` et
+      `STRIPE_WEBHOOK_SECRET` sont deja poses sur le Worker.
+
+  Note : l'infrastructure est deja en production (Workers `raceup` + `raceup-backend-api`,
+  base D1 `RaceUp-User-Data` migree jusqu'a 010, buckets R2). L'ancienne liste de mise en
+  place initiale de cette section etait obsolete.
 
 ## Priorite haute
 
-- [ ] Activer le paiement en ligne : `npm run stripe:setup` (cle Stripe live → webhook + secrets STRIPE_*)
+- [ ] Activer le paiement en ligne : poser `STRIPE_SECRET_KEY` (`npx wrangler secret put STRIPE_SECRET_KEY`). Le webhook Stripe de test et `STRIPE_WEBHOOK_SECRET` sont deja en place ; pour la production, `npm run stripe:setup` avec la cle live refait les deux
 - [ ] Configurer un custom domain Cloudflare pour l'API (ex: `api.raceup.com`)
 - [ ] Mettre en place des tests automatises (vitest + miniflare)
 
 ## Priorite moyenne
 
-- [ ] Implementer `PATCH /api/auth/me`, `POST /api/auth/change-password` et `POST /api/auth/change-email` (appeles par la page Parametres du front, documentes mais absents du code)
-- [ ] Ajouter la verification email (envoi d'un lien de confirmation a l'inscription)
-- [ ] Ajouter la fonctionnalite "mot de passe oublie" (reset par email)
+- [ ] Traiter les emails entrants de l'inbox Resend `support@race-up.net` (webhook `inbox.email.received` → rattacher la reponse au ticket support correspondant)
+- [ ] Suppression automatique des contacts en rebond dur (table de suppression Resend) pour ne pas degrader la reputation d'envoi
+
 
 ## Priorite basse
 
@@ -29,7 +29,6 @@
 
 ## Paiements - evolutions
 
-- [ ] Email au client quand une echeance est demandee (aujourd'hui visible uniquement dans son espace projet)
 - [ ] Abonnement de maintenance mensuel (Stripe Billing) en complement du module "Maintenance 12 mois"
 - [ ] Bouton "Rembourser" dans le dashboard (aujourd'hui : depuis le dashboard Stripe, statut synchronise par webhook)
 
@@ -42,6 +41,10 @@
 
 ## Fait
 
+- [x] Emails transactionnels Resend : domaine `race-up.net` verifie (DKIM/SPF/DMARC sur Cloudflare), 25 gabarits bilingues, journal de livraison + webhook Svix, page `/dashboard/emails` (migration 010)
+- [x] Verification d'email non bloquante (exigee pour payer uniquement), mot de passe oublie, `PATCH /api/auth/me`, `change-password`, `change-email` + confirmation
+- [x] Email au client quand une echeance est demandee
+- [x] Notifications internes vers `raceup.co@gmail.com` a chaque commande, echec, remboursement, demande de support et inscription (reply-to = client)
 - [x] Structure du projet (Hono + TypeScript + D1)
 - [x] Schema de base de donnees (users + refresh_tokens)
 - [x] Service de hachage de mot de passe (PBKDF2-SHA-256)

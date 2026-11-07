@@ -67,7 +67,14 @@ src/
 │   ├── support.ts           Endpoints support tickets : creation publique
 │   ├── consent.ts           Endpoints consent cookies (public) : POST /api/consent, status, policy, withdraw, my-consents
 │   ├── payments.ts          Paiements Stripe : config, checkout (acompte), statut, commandes, echeances, webhook
+│   ├── emails.ts            Webhook Resend : statuts de livraison (signature Svix verifiee en WebCrypto)
 │   └── tracking.ts          Endpoints tracking : page views (public)
+├── emails/
+│   ├── layout.ts            Gabarit HTML des emails (tableaux + styles inline) + helpers version texte
+│   ├── auth.ts              Bienvenue, verification, mot de passe, alertes securite, inscription (interne)
+│   ├── orders.ts            Recus, paiement en traitement, echec, remboursement, echeance (+ internes)
+│   ├── support.ts           Accuse de reception, alerte interne (reply-to demandeur), cloture
+│   └── projects.ts          Projet ouvert, livrable depose, reponse ticket, projet termine
 ├── data/
 │   └── catalog.ts           Catalogue tarifaire du configurateur (SOURCE DE VERITE des prix) + priceConfiguration()
 ├── dashboard/
@@ -89,12 +96,15 @@ src/
 │       ├── projects.tsx     Projects: list (actifs+archives), detail (+ paiements + demande d'echeance), edit all fields, archive/restore
 │       ├── payments.tsx     Paiements: stats d'encaissement, liste filtrable, demande/annulation d'echeance
 │       ├── consent.tsx      Consentement: liste filtrable + KPIs, detail + historique, recherche, export CSV, withdraw admin
+│       ├── emails.tsx       Emails: journal d'envoi + taux de livraison, filtres (statut, gabarit, destinataire)
 │       ├── database.tsx     Schema MPD (SVG), tables explorer, SQL query (super_admin)
 │       ├── docs.tsx         API docs + testeur fetch()
 │       └── config.tsx       Placeholder
 ├── utils/
 │   ├── hash.ts              hashIP (SHA-256 + CONSENT_SALT) pour pseudonymiser les IPs dans cookie_consents
-│   └── origins.ts           Origines du site : CORS + URL de retour Stripe (liste unique)
+│   ├── origins.ts           Origines du site : CORS + URL de retour Stripe (liste unique)
+│   ├── money.ts             formatEuros / formatFileSize (partage paiements + emails, evite un import circulaire)
+│   └── background.ts        background(c, task) : envoi apres la reponse HTTP (executionCtx.waitUntil)
 ├── middleware/
 │   ├── auth.ts              Verification Bearer JWT, injection du payload dans le contexte
 │   ├── admin.ts             Verification role admin/super_admin
@@ -115,7 +125,10 @@ src/
 │   ├── security.ts          Security event logging → D1 security_events (fire-and-forget)
 │   ├── oauth.ts             OAuth Google/Apple
 │   ├── cookies.ts           Gestion cookies refresh token
-│   └── consent.ts           Logique metier consent : create, get, history, withdraw, list, stats, exportCsv (async gen)
+│   ├── consent.ts           Logique metier consent : create, get, history, withdraw, list, stats, exportCsv (async gen)
+│   ├── email.ts             Envoi Resend (fetch, sans SDK) + journal email_deliveries + stats
+│   ├── email-token.ts       Jetons email a usage unique (verification, reset, changement d'adresse)
+│   └── notify.ts            Orchestration des notifications : destinataire, langue, cle d'idempotence
 └── validators/
     ├── auth.ts              Schemas Zod pour auth
     ├── admin.ts             Schemas Zod pour admin
@@ -133,6 +146,7 @@ db/
     ├── 002_request_logs.sql     Table: request_logs + index (dashboard monitoring)
     ├── 005-support-tickets.sql  Table: support_tickets + index (system ticketing public)
     ├── 006-security-events.sql  Table: security_events + index (audit logging)
+    ├── 010-emails.sql           users.email_verified_at + tables email_tokens, email_deliveries
     ├── 007-cookie-consents.sql  Table: cookie_consents + index (registre RGPD des consentements)
     ├── 008-maintenance.sql      Table: maintenance_state (mono-ligne)
     └── 009-orders.sql           Tables: orders (paiements Stripe) + stripe_customers
@@ -153,6 +167,7 @@ db/
 │ birth_date TEXT           │   │
 │ auth_provider TEXT        │   │
 │ role TEXT                 │   │
+│ email_verified_at TEXT    │   │   NULL = adresse non confirmee
 │ created_at TEXT           │   │
 │ updated_at TEXT           │   │
 └─────────────────────────┘   │
@@ -258,6 +273,18 @@ Immutabilite : un changement = nouvelle ligne (meme consent_id). Retrait = UPDAT
 
 stripe_customers (user_id FK → users CASCADE, livemode, customer_id UNIQUE, created_at)
   PK (user_id, livemode) — un client Stripe par utilisateur et par mode (test/live)
+
+email_tokens (id PK, user_id FK → users CASCADE, purpose, token_hash UNIQUE (SHA-256),
+              new_email, expires_at, used_at, created_at)
+  purpose : email_verification | password_reset | email_change
+  Jeton a usage unique, jamais stocke en clair. `used_at` sert de verrou (double clic).
+  IDX: (user_id, purpose, created_at), expires_at
+
+email_deliveries (id PK, resend_id UNIQUE, template, recipient, user_id, subject,
+                  status, error, created_at, updated_at)
+  status : sent | delivered | delivery_delayed | bounced | complained | failed | skipped
+  Journal d'envoi. PAS de FK sur user_id : le journal survit a la suppression du compte.
+  Alimente par le webhook Resend. IDX: created_at, (recipient, created_at), (status, created_at)
 ```
 
 ## Endpoints API
@@ -275,9 +302,14 @@ stripe_customers (user_id FK → users CASCADE, livemode, customer_id UNIQUE, cr
 | GET | /me | Profil utilisateur | Oui |
 | PATCH | /me | Update profil | Oui |
 | POST | /change-password | Changer mot de passe | Oui |
-| POST | /change-email | Changer email | Oui |
+| POST | /change-email | Demande de changement d'email (mot de passe requis, lien de confirmation vers la nouvelle adresse) | Oui |
+| POST | /change-email/confirm | Applique le changement via le jeton recu par email | Non |
+| POST | /verify-email | Confirme l'adresse via le jeton recu par email | Non |
+| POST | /verify-email/resend | Renvoie un lien de confirmation (max 3 / heure) | Oui |
+| POST | /forgot-password | Demande un lien de reinitialisation (reponse toujours identique) | Non |
+| POST | /reset-password | Applique le nouveau mot de passe via le jeton | Non |
 | POST | /logout | Deconnexion | Oui |
-| DELETE | /account | Supprimer compte (+ security log) | Oui |
+| DELETE | /account | Supprimer compte (+ security log + email de confirmation) | Oui |
 
 ### Projets (`/api/projects`) — Auth requise
 
@@ -383,6 +415,12 @@ Voir la section **Paiements Stripe** ci-dessous (flux, statuts, securite).
 | GET | /export?... | Export CSV streaming (ReadableStream, async generator) |
 | GET | /:id | Detail d'un consentement + historique des versions (meme consent_id) |
 | POST | /:id/withdraw | Retrait admin force (preuve CNIL) |
+
+### Emails (`/api/emails`)
+
+| Methode | Route | Description | Auth |
+|---------|-------|-------------|------|
+| POST | /webhook | Statuts de livraison Resend (delivered, bounced, complained, delayed, failed) | Signature Svix |
 
 ### Tracking (`/api/track`) — Public
 
@@ -557,6 +595,145 @@ Les paiements survivent a la suppression d'un compte (`user_id → NULL`, email/
 les routes de paiement repondent `503 PAYMENTS_UNAVAILABLE` et le configurateur bascule sur la demande de devis.
 `npm run stripe:setup` cree le webhook Stripe et pose les deux secrets (saisie masquee, rien sur disque).
 
+## Emails transactionnels (Resend)
+
+Tous les emails du site partent de **Resend**, via son API REST appelee en `fetch` natif
+(`services/email.ts`) : pas de SDK, donc aucun poids supplementaire dans le bundle Worker.
+
+### Deux regles structurantes
+
+1. **Un email ne fait jamais echouer une action metier.** Un paiement encaisse reste encaisse
+   meme si Resend est en panne. Toutes les erreurs sont capturees et journalisees, jamais
+   propagees. Les envois partent apres la reponse HTTP (`utils/background.ts` →
+   `executionCtx.waitUntil`) : le client n'attend pas Resend.
+2. **Sans `RESEND_API_KEY`, tout est desactive proprement.** Les envois sont consignes au statut
+   `skipped` dans `email_deliveries` : l'API fonctionne en local et en test sans secret, et le
+   journal montre quels emails auraient du partir.
+
+### Domaine d'envoi
+
+L'expedition exige un domaine **verifie** dans Resend. Il est impossible d'envoyer depuis une
+adresse `@gmail.com` : Google n'autorise pas la publication d'enregistrements DKIM/SPF sur son
+domaine. Le domaine utilise est donc `race-up.net` (DNS gere sur Cloudflare) :
+
+| Type | Nom | Valeur | Role |
+|------|-----|--------|------|
+| TXT | `resend._domainkey` | `p=MIGfMA0GCS…` | DKIM (signature) |
+| MX | `send` | `feedback-smtp.eu-west-1.amazonses.com` (prio 10) | retours / bounces |
+| TXT | `send` | `v=spf1 include:amazonses.com ~all` | SPF |
+| CNAME | `rsend` | `send.forge.rmta.net` | Return-Path |
+| MX | `@` | `receive-euw1.forge.rmta.net` (prio 10) | reception (inbox `support@race-up.net`) |
+| TXT | `_dmarc` | `v=DMARC1; p=none;` | DMARC (surveillance) |
+
+Region Resend : `eu-west-1`. Adresses : expedition `no-reply@race-up.net`, reponses
+`support@race-up.net` (inbox Resend), notifications internes vers `raceup.co@gmail.com`.
+
+### Architecture
+
+```
+routes/*            declenchent les notifications (jamais sendEmail directement)
+  └── services/notify.ts     orchestration : destinataire, langue, idempotence
+        ├── emails/auth.ts       bienvenue, verification, mot de passe, securite
+        ├── emails/orders.ts     recus, echecs, remboursements, echeances (+ interne)
+        ├── emails/support.ts    accuse de reception, alerte interne, cloture
+        ├── emails/projects.ts   projet ouvert, livrable, tickets, projet termine
+        ├── emails/layout.ts     gabarit HTML (tableaux + styles inline) + version texte
+        └── services/email.ts    appel Resend + journal email_deliveries
+```
+
+Chaque email a une **version texte** en plus du HTML : un email sans partie texte est penalise
+par les filtres anti-spam et illisible sur certains clients. Toutes les donnees tierces (nom du
+client, libelle de projet, message de ticket) passent par `esc()` : pas d'injection HTML.
+
+### Catalogue des emails
+
+| Gabarit | Destinataire | Declencheur |
+|---------|--------------|-------------|
+| `welcome_verify` | client | `POST /api/auth/register` |
+| `email_verification` | client | `POST /api/auth/verify-email/resend` |
+| `password_reset` | client | `POST /api/auth/forgot-password` |
+| `password_changed` | client | reset ou changement depuis l'espace client |
+| `email_change_confirm` | nouvelle adresse | `POST /api/auth/change-email` |
+| `email_changed` | **ancienne** adresse | changement confirme (alerte securite) |
+| `account_deleted` | client | `DELETE /api/auth/account` |
+| `login_locked` | client | verrou anti brute-force (10 echecs / 15 min) |
+| `order_paid` | client | paiement confirme (acompte ou echeance) |
+| `order_processing` | client | paiement differe en attente (SEPA) |
+| `order_failed` | client | paiement refuse |
+| `order_refunded` | client | remboursement integral |
+| `milestone_requested` | client | echeance demandee depuis le dashboard |
+| `support_received` | demandeur | `POST /api/support` |
+| `support_closed` | demandeur | cloture d'un ticket support |
+| `project_created` | client | projet cree par un admin |
+| `project_file_added` | client | fichier deposé par RaceUp (livrable) |
+| `project_completed` | client | projet passe a « termine » |
+| `project_ticket_reply` | client | reponse de RaceUp sur un ticket projet |
+| `admin_new_user` | RaceUp | nouvelle inscription |
+| `admin_order_paid` | RaceUp | **commande encaissee** (toutes les infos + liens Stripe) |
+| `admin_order_failed` | RaceUp | paiement refuse |
+| `admin_order_refunded` | RaceUp | remboursement |
+| `admin_support_received` | RaceUp | nouvelle demande (reply-to = demandeur) |
+| `admin_project_ticket` | RaceUp | ticket ou message d'un client |
+
+Les notifications internes portent un **`reply_to` sur l'adresse du client** : repondre a
+l'alerte ecrit directement au client, sans copier-coller.
+
+### Idempotence
+
+Les emails lies a un paiement sont conditionnes a la **reussite de la transition en base**
+(`changes > 0`), et portent une cle d'idempotence Resend (`order_paid:<id>`…). C'est
+indispensable : le webhook Stripe et la page de confirmation synchronisent la meme commande en
+parallele, et Stripe rejoue ses evenements jusqu'a 3 jours. Sans ces deux garde-fous, le client
+recevrait plusieurs fois le meme recu.
+
+### Verification d'adresse
+
+Non bloquante par choix : le compte fonctionne sans confirmation, un bandeau invite a la faire.
+Elle est **exigee uniquement pour payer** (`403 EMAIL_NOT_VERIFIED` sur les deux routes de
+checkout) — on ne facture jamais une adresse injoignable, puisque la facture y est envoyee.
+
+Les comptes crees avant la migration 010 ont ete consideres verifies : ils existaient deja,
+certains avaient deja paye, et leur bloquer le paiement du jour au lendemain aurait ete absurde.
+Les comptes OAuth (Google, Apple) sont verifies a la creation : le fournisseur a deja valide
+l'adresse.
+
+### Jetons email (`email_tokens`)
+
+Memes garanties que les refresh tokens : valeur opaque de 32 octets, seul le **hache SHA-256**
+est stocke, usage unique, duree de vie courte. Creer un jeton invalide les precedents du meme
+usage. L'`UPDATE` conditionnel sur `used_at` sert de verrou : deux clics simultanes sur le meme
+lien ne peuvent pas reussir tous les deux.
+
+| Usage | Duree | Remarque |
+|-------|-------|----------|
+| `email_verification` | 48 h | large : le client peut confirmer le lendemain |
+| `password_reset` | 1 h | court : c'est une prise de controle de compte |
+| `email_change` | 24 h | `new_email` appliquee seulement a la confirmation |
+
+Garde-fou par compte en plus du rate limit par IP : 3 jetons par heure et par usage.
+
+### Anti-enumeration
+
+`POST /forgot-password` renvoie **toujours** la meme reponse 200, que le compte existe ou non.
+Sinon l'endpoint devient un oracle permettant de savoir qui est client. Le renvoi de lien de
+verification est protege par JWT pour la meme raison.
+
+### Journal de livraison (`email_deliveries`)
+
+Chaque envoi est consigne (gabarit, destinataire, objet, statut). Le webhook Resend
+`POST /api/emails/webhook` met ensuite a jour le statut reel : `delivered`, `bounced`,
+`complained`, `delivery_delayed`, `failed`. Un rebond signifie que l'adresse du client est
+injoignable — donc que sa facture n'est jamais arrivee. Visible dans `/dashboard/emails`.
+
+Le webhook est signe au format **Svix** (HMAC-SHA256 de `<id>.<timestamp>.<corps brut>`),
+verifie a la main en WebCrypto (le SDK Svix n'est pas compatible Workers), avec tolerance de
+5 minutes contre les rejeux et comparaison a temps constant.
+
+### Inbox Resend
+
+`support@race-up.net` est une **inbox Resend** : les reponses des clients y arrivent en fils de
+discussion, consultables via l'API Resend. Le MX racine de `race-up.net` pointe vers Resend.
+
 ## Flux d'authentification
 
 ### Tokens
@@ -630,5 +807,12 @@ Cela permet aux admins de consulter et gerer tous les projets depuis le dashboar
 | STRIPE_WEBHOOK_SECRET | Secret (optionnel) | Secret de signature du webhook (whsec_...) |
 | SITE_URL | Env var | URL publique du site (`https://race-up.net`), retour Stripe par defaut |
 | STRIPE_INVOICE_CREATION | Env var | `"true"` : facture Stripe generee pour chaque paiement |
+| RESEND_API_KEY | Secret (optionnel) | Cle Resend (`re_...`), portee a l'envoi sur race-up.net. Absente → emails desactives proprement |
+| RESEND_WEBHOOK_SECRET | Secret (optionnel) | Secret de signature Svix du webhook Resend (`whsec_...`) |
+| EMAIL_FROM | Env var | Adresse d'expedition (`no-reply@race-up.net`) |
+| EMAIL_FROM_NAME | Env var | Nom affiche (`RaceUp`) |
+| EMAIL_REPLY_TO | Env var | Adresse de reponse proposee au client (`support@race-up.net`) |
+| EMAIL_ADMIN | Env var | Destinataire des notifications internes (`raceup.co@gmail.com`) |
+| DASHBOARD_URL | Env var | Base des liens vers le dashboard dans les emails internes |
 | AUTH_RATE_LIMITER | Rate limit | 10 requetes / 60 s par IP et par endpoint sensible |
 | FORMS_RATE_LIMITER | Rate limit | 5 requetes / 60 s par IP (formulaires publics) |

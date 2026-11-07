@@ -35,7 +35,8 @@ Ce fichier est ta **carte**. Sers-t'en pour aller droit au but au lieu d'explore
 - Cloudflare Workers (wrangler 4.0+)
 - D1 Database: `RaceUp-User-Data` (SQLite)
 - R2 Bucket: `raceup-project-files`
-- Secrets: `JWT_SECRET` (signature JWT) + `CONSENT_SALT` (hash IP RGPD) + `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` (optionnels : sans eux paiement désactivé) — via `wrangler secret put` (Stripe : `npm run stripe:setup`)
+- Secrets: `JWT_SECRET` (signature JWT) + `CONSENT_SALT` (hash IP RGPD) + `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` (optionnels : sans eux paiement désactivé) + `RESEND_API_KEY` / `RESEND_WEBHOOK_SECRET` (optionnels : sans eux emails désactivés proprement) — via `wrangler secret put` (Stripe : `npm run stripe:setup`)
+- Emails: **Resend** (API REST en `fetch`, pas de SDK). Domaine d'envoi vérifié `race-up.net` (DKIM/SPF/DMARC sur Cloudflare). ⚠️ Impossible d'envoyer depuis `@gmail.com` (Google n'autorise pas DKIM/SPF sur son domaine) — `raceup.co@gmail.com` est **destinataire** des notifications internes, pas expéditeur
 
 ## Architecture Fichiers
 
@@ -51,7 +52,14 @@ src/
 │   ├── tracking.ts       Page views (public)
 │   ├── consent.ts        Consentement cookies RGPD (post, status, policy, withdraw, my-consents)
 │   ├── maintenance.ts    Statut mode maintenance (GET public)
-│   └── payments.ts       Paiements Stripe (config, checkout acompte, statut, commandes, échéances, webhook)
+│   ├── payments.ts       Paiements Stripe (config, checkout acompte, statut, commandes, échéances, webhook)
+│   └── emails.ts         Webhook Resend : statuts de livraison (signature Svix vérifiée en WebCrypto)
+├── emails/               Gabarits d'emails (HTML inline + version texte, bilingues fr/en)
+│   ├── layout.ts         renderEmail() + helpers (esc, table, button, callout, textBlock)
+│   ├── auth.ts           Bienvenue/vérification, mot de passe, alertes sécurité, inscription (interne)
+│   ├── orders.ts         Reçu, en traitement, échec, remboursement, échéance (+ 3 internes)
+│   ├── support.ts        Accusé de réception, alerte interne (reply-to demandeur), clôture
+│   └── projects.ts       Projet ouvert, livrable déposé, réponse ticket, projet terminé
 ├── data/
 │   └── catalog.ts        Catalogue tarifaire du configurateur — SOURCE DE VÉRITÉ des prix (miroir front : src/data/pricing-catalog.ts)
 ├── dashboard/
@@ -75,7 +83,8 @@ src/
 │       ├── database.tsx      MPD schema (SVG), tables explorer, SQL query (super_admin)
 │       ├── docs.tsx          API documentation + tester
 │       ├── config.tsx        Placeholder
-│       └── consent.tsx       Consentements RGPD (liste, filtres, stats, graphiques, repartitions, registre, export CSV/JSON, withdraw)
+│       ├── consent.tsx       Consentements RGPD (liste, filtres, stats, graphiques, repartitions, registre, export CSV/JSON, withdraw)
+│       └── emails.tsx        Journal des emails : taux de livraison, rebonds, filtres (statut/gabarit/destinataire)
 ├── middleware/
 │   ├── auth.ts           Bearer JWT verification → injecte jwtPayload
 │   ├── admin.ts          Role check (admin/super_admin) → injecte currentUser
@@ -97,7 +106,10 @@ src/
 │   ├── maintenance.ts    Etat maintenance (get/set + isMaintenanceActive fenetre horaire)
 │   ├── order.ts          CRUD orders + transitions idempotentes (fulfillOrder = batch UPDATE + INSERT OR IGNORE projet) + stats + toPublicOrder
 │   ├── payment.ts        Orchestration Stripe : createDepositCheckout, createMilestoneCheckout, syncCheckoutSession, handleChargeRefunded
-│   └── stripe.ts         getStripe (Workers), constructWebhookEvent, isPaymentsEnabled, getOrCreateStripeCustomer
+│   ├── stripe.ts         getStripe (Workers), constructWebhookEvent, isPaymentsEnabled, getOrCreateStripeCustomer
+│   ├── email.ts          sendEmail (Resend) + journal email_deliveries + listEmailDeliveries/getEmailStats
+│   ├── email-token.ts    Jetons email à usage unique (SHA-256, verrou sur used_at) + markEmailVerified
+│   └── notify.ts         **Point d'entrée des emails** : les routes appellent notifyX(), jamais sendEmail
 ├── validators/
 │   ├── auth.ts           Schemas Zod (register, login, OAuth)
 │   ├── admin.ts          Schemas Zod (projets, role update)
@@ -106,7 +118,9 @@ src/
 │   └── payments.ts       Schemas Zod paiements + validationHook (erreurs au format standard)
 ├── utils/
 │   ├── hash.ts           hashIP (SHA-256 + sel CONSENT_SALT, RGPD) + getClientIP (headers CF)
-│   └── origins.ts        Origines du site : isCorsAllowedOrigin (CORS) + resolveSiteOrigin (retour Stripe)
+│   ├── origins.ts        Origines du site : isCorsAllowedOrigin (CORS) + resolveSiteOrigin (retour Stripe)
+│   ├── money.ts          formatEuros / formatFileSize (partagé paiements + emails)
+│   └── background.ts     background(c, task) : envoi après la réponse HTTP (executionCtx.waitUntil)
 scripts/
 └── stripe-setup.mjs      npm run stripe:setup : webhook Stripe + secrets wrangler (saisie masquée)
 db/
@@ -115,7 +129,8 @@ db/
     ├── 006-security-events.sql  Table security_events + index
     ├── 007-cookie-consents.sql  Table cookie_consents (preuve RGPD) + index
     ├── 008-maintenance.sql      Table maintenance_state (mono-ligne, mode maintenance)
-    └── 009-orders.sql           Tables orders (paiements Stripe) + stripe_customers
+    ├── 009-orders.sql           Tables orders (paiements Stripe) + stripe_customers
+    └── 010-emails.sql           users.email_verified_at + tables email_tokens, email_deliveries
 docs/
 ├── architecture.md       Documentation complete (source de verite)
 └── TODO.md               Roadmap
@@ -136,7 +151,12 @@ docs/
 | GET | /me | JWT | Profil utilisateur courant |
 | PATCH | /me | JWT | Update profil (first_name, last_name, username, birth_date) |
 | POST | /change-password | JWT | Changer mot de passe |
-| POST | /change-email | JWT | Changer email |
+| POST | /change-email | JWT | Demande de changement d'email (mot de passe requis -> lien vers la nouvelle adresse) |
+| POST | /change-email/confirm | - | Applique le changement via le jeton |
+| POST | /verify-email | - | Confirme l'adresse via le jeton |
+| POST | /verify-email/resend | JWT | Renvoie un lien (max 3/h par compte) |
+| POST | /forgot-password | - | Demande un lien de reset (réponse TOUJOURS identique : anti-énumération) |
+| POST | /reset-password | - | Applique le nouveau mot de passe (révoque toutes les sessions) |
 | POST | /logout | JWT | Supprime tous refresh tokens + cookie |
 | DELETE | /account | JWT | Supprime compte (cascade: projets, tickets, fichiers, tokens) |
 
@@ -294,7 +314,7 @@ Prix TOUJOURS recalculés serveur (`data/catalog.ts`). Confirmation idempotente 
 ```sql
 users (id PK, email UNIQUE, password_hash, username UNIQUE, first_name, last_name,
        birth_date?, auth_provider['email'|'google'|'apple'], role['user'|'admin'|'super_admin'],
-       created_at, updated_at)
+       email_verified_at?, created_at, updated_at)
   IDX: email, username, role
 
 refresh_tokens (id PK, user_id FK→users CASCADE, token_hash, expires_at, created_at)
@@ -348,6 +368,14 @@ orders (id PK, user_id? FK→users SET NULL, customer_email, customer_name?, pro
   IDX: session(unique), (user_id, created_at), (status, created_at), project_id, payment_intent
 
 stripe_customers (user_id FK→users CASCADE, livemode[0|1], customer_id UNIQUE, created_at)  PK(user_id, livemode)
+
+email_tokens (id PK, user_id FK→users CASCADE, purpose['email_verification'|'password_reset'|
+              'email_change'], token_hash UNIQUE (SHA-256), new_email?, expires_at, used_at?, created_at)
+  Usage unique, jamais en clair. TTL : vérif 48h, reset 1h, changement d'email 24h.
+
+email_deliveries (id PK, resend_id UNIQUE?, template, recipient, user_id?, subject,
+                  status['sent'|'delivered'|'delivery_delayed'|'bounced'|'complained'|'failed'|'skipped'],
+                  error?, created_at, updated_at)  -- pas de FK : survit à la suppression du compte
 ```
 
 Relations: users 1→N projects 1→N tickets 1→N ticket_messages
@@ -384,6 +412,8 @@ Codes: UNAUTHORIZED(401), FORBIDDEN(403), NOT_FOUND(404), EMAIL_ALREADY_EXISTS(4
 
 **Paiements**: acompte = commande `pending` avec `project_id` réservé → au paiement, batch D1 (`UPDATE orders` conditionnel + `INSERT OR IGNORE INTO projects`) : jamais de projet en double. Échéance = commande `awaiting_payment` créée par un admin, payable depuis l'espace projet. Statuts et flux : `docs/architecture.md` § Paiements Stripe.
 
+**Emails**: les routes appellent `services/notify.ts` (`notifyOrderPaid`, `notifySupportTicket`...), **jamais `sendEmail` directement** — c'est là que vivent le choix du destinataire, la langue et la clé d'idempotence. Envoi **après** la réponse HTTP via `background(c, ...)`. Un email ne doit JAMAIS faire échouer une action métier : tout est capturé, rien n'est propagé. Les emails de paiement sont conditionnés à la réussite de la transition en base (`changes > 0`) **et** portent une clé d'idempotence Resend : le webhook Stripe et la page de confirmation synchronisent la même commande en parallèle, et Stripe rejoue ses événements 3 jours. Les notifications internes portent un `reply_to` sur l'adresse du client. Vérification d'email **non bloquante** sauf pour payer (`403 EMAIL_NOT_VERIFIED`). Détail : `docs/architecture.md` § Emails transactionnels.
+
 **Consent RGPD**: preuve immuable (jamais de DELETE ; le retrait = marquage `withdrawn_at`). IP hachée SHA-256 + sel (`CONSENT_SALT`), jamais en clair. Consent valide si non retiré + non expiré (~13 mois) + `policy_version` à jour. Bump `POLICY_VERSION` → re-consentement forcé.
 
 ## Config Wrangler
@@ -410,4 +440,6 @@ npm run stripe:setup      # active Stripe : webhook + secrets STRIPE_* (clé dem
 npx wrangler d1 execute RaceUp-User-Data --file=db/migrations/xxx.sql  # migration manuelle
 npx wrangler secret put JWT_SECRET    # secret signature JWT
 npx wrangler secret put CONSENT_SALT  # secret hash IP (RGPD)
+npx wrangler secret put RESEND_API_KEY        # emails transactionnels (sinon désactivés)
+npx wrangler secret put RESEND_WEBHOOK_SECRET # statuts de livraison Resend (Svix)
 ```
