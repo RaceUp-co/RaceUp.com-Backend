@@ -17,6 +17,16 @@ export type Bindings = {
   STRIPE_WEBHOOK_SECRET?: string;
   SITE_URL: string; // URL publique du site (retour de Stripe Checkout)
   STRIPE_INVOICE_CREATION?: string; // "true" = facture Stripe generee pour chaque paiement
+  // Emails transactionnels Resend — RESEND_API_KEY est un secret OPTIONNEL : sans lui,
+  // les envois sont desactives proprement (journalises en 'skipped') et aucun flux metier
+  // n'echoue. Le domaine d'envoi doit etre verifie dans Resend (race-up.net).
+  RESEND_API_KEY?: string;
+  RESEND_WEBHOOK_SECRET?: string; // signature Svix du webhook Resend (statuts de livraison)
+  EMAIL_FROM?: string; // adresse d'expedition (defaut : no-reply@race-up.net)
+  EMAIL_FROM_NAME?: string; // nom affiche (defaut : RaceUp)
+  EMAIL_REPLY_TO?: string; // adresse de reponse proposee au client (defaut : support@race-up.net)
+  EMAIL_ADMIN?: string; // destinataire des notifications internes (defaut : raceup.co@gmail.com)
+  DASHBOARD_URL?: string; // base des liens vers le dashboard dans les emails internes
   // Limitation de debit (Workers Rate Limiting) — optionnels : absents en dev/tests
   AUTH_RATE_LIMITER?: RateLimiter;
   FORMS_RATE_LIMITER?: RateLimiter;
@@ -56,6 +66,7 @@ export type User = {
   birth_date: string | null;
   auth_provider: string;
   role: string;
+  email_verified_at: string | null;
   created_at: string;
   updated_at: string;
 };

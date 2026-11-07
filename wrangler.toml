@@ -36,6 +36,16 @@ POLICY_VERSION = "v1.0.0"
 SITE_URL = "https://race-up.net"
 STRIPE_INVOICE_CREATION = "true"
 
+# Emails transactionnels Resend (secret RESEND_API_KEY + RESEND_WEBHOOK_SECRET via
+# `wrangler secret put`). Sans RESEND_API_KEY, les envois sont desactives proprement.
+# L'expedition exige un domaine verifie dans Resend : race-up.net (DKIM + SPF + DMARC).
+EMAIL_FROM = "no-reply@race-up.net"
+EMAIL_FROM_NAME = "RaceUp"
+EMAIL_REPLY_TO = "support@race-up.net"
+# Destinataire des notifications internes (commandes, support, inscriptions)
+EMAIL_ADMIN = "raceup.co@gmail.com"
+DASHBOARD_URL = "https://raceup-backend-api.jacqueslucas-m2101.workers.dev/dashboard"
+
 # Observabilité Cloudflare
 [observability]
 [observability.logs]
