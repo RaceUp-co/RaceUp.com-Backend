@@ -4,6 +4,8 @@ import type { AppType } from '../types';
 import { createSupportTicketSchema } from '../validators/support';
 import { createSupportTicket } from '../services/support';
 import { rateLimit } from '../middleware/rate-limit';
+import { notifySupportTicket } from '../services/notify';
+import { background } from '../utils/background';
 
 const support = new Hono<AppType>();
 
@@ -18,6 +20,14 @@ support.post('/', rateLimit('FORMS_RATE_LIMITER', 'support'), zValidator('json',
     category,
     message,
     metadata
+  );
+
+  // Deux emails partent apres la reponse : l'accuse de reception au demandeur et
+  // l'alerte complete vers la boite RaceUp (avec reply-to sur l'adresse du demandeur,
+  // pour repondre sans copier-coller).
+  background(
+    c,
+    notifySupportTicket(c.env, ticket).catch((err) => console.error('support emails failed', err))
   );
 
   return c.json(

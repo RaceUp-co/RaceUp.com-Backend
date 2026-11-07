@@ -36,6 +36,8 @@ import {
 import { consentFiltersSchema } from '../validators/consent';
 import { adminPurchasesQuerySchema, validationHook } from '../validators/payments';
 import { listOrdersAdmin, toPublicOrder } from '../services/order';
+import { notifyProjectCreated, notifySupportClosed } from '../services/notify';
+import { background } from '../utils/background';
 
 const admin = new Hono<AppType>();
 
@@ -427,6 +429,18 @@ admin.post(
 
     const project = await createProject(c.env.DB, data);
 
+    // Le client doit apprendre l'ouverture de son projet autrement qu'en allant
+    // verifier son espace de lui-meme.
+    background(
+      c,
+      notifyProjectCreated(
+        c.env,
+        user,
+        { id: project.id, name: project.name, service_type: project.service_type },
+        'fr'
+      ).catch((err) => console.error('project created email failed', err))
+    );
+
     return c.json(
       {
         success: true,
@@ -476,10 +490,22 @@ admin.get('/support-tickets/:id', async (c) => {
 
 // PATCH /support-tickets/:id — Fermer un ticket
 admin.patch('/support-tickets/:id', zValidator('json', closeSupportTicketSchema), async (c) => {
-  const updated = await closeSupportTicket(c.env.DB, c.req.param('id'));
+  const ticketId = c.req.param('id');
+
+  // Lu AVANT la cloture : on a besoin de l'email et du nom du demandeur pour l'avertir.
+  const ticket = await getSupportTicketById(c.env.DB, ticketId);
+  const updated = await closeSupportTicket(c.env.DB, ticketId);
 
   if (!updated) {
     return c.json({ success: false, error: { code: 'NOT_FOUND', message: 'Ticket introuvable.' } }, 404);
+  }
+
+  // Seulement si le ticket etait encore ouvert : refermer deux fois n'envoie qu'un email.
+  if (ticket && ticket.status === 'open') {
+    background(
+      c,
+      notifySupportClosed(c.env, ticket).catch((err) => console.error('support closed email failed', err))
+    );
   }
 
   return c.json({

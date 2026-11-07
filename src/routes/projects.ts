@@ -26,6 +26,8 @@ import {
   deleteFileRecord,
   getProjectStorageUsed,
 } from '../services/file';
+import { notifyProjectFileAdded, notifyTicketMessage } from '../services/notify';
+import { background } from '../utils/background';
 
 const projects = new Hono<AppType>();
 
@@ -45,6 +47,20 @@ async function assertProjectAccess(
     return { error: 'FORBIDDEN' as const, project: null };
   }
   return { error: null, project };
+}
+
+function isStaff(role: string): boolean {
+  return role === 'admin' || role === 'super_admin';
+}
+
+/**
+ * Proprietaire du projet : c'est lui qu'on previent quand RaceUp agit, et c'est son
+ * adresse qui sert de reply-to quand c'est lui qui ecrit. Il peut etre different de
+ * l'utilisateur courant (un admin agissant sur le projet d'un client).
+ */
+async function getProjectOwner(db: D1Database, ownerId: string | null) {
+  if (!ownerId) return null;
+  return getUserById(db, ownerId);
 }
 
 // ==================== PROJETS ====================
@@ -164,6 +180,28 @@ projects.post('/:id/tickets', zValidator('json', createTicketSchema), async (c) 
     message: data.message,
   });
 
+  background(
+    c,
+    (async () => {
+      const { project } = await assertProjectAccess(c.env.DB, c.req.param('id'), user.id, user.role);
+      const owner = project ? await getProjectOwner(c.env.DB, project.user_id) : null;
+      if (!project || !owner) return;
+      await notifyTicketMessage(c.env, {
+        // Un admin qui ouvre un ticket sur le projet d'un client ecrit AU client ;
+        // le client qui ouvre un ticket ecrit a RaceUp.
+        authorIsStaff: isStaff(user.role) && user.id !== owner.id,
+        authorName: `${user.first_name ?? ''} ${user.last_name ?? ''}`.trim() || user.username,
+        message: data.message,
+        messageId: ticket.id,
+        ticketSubject: ticket.subject,
+        isNewTicket: true,
+        project: { id: project.id, name: project.name },
+        client: owner,
+        lang: 'fr',
+      });
+    })().catch((err) => console.error('ticket created email failed', err))
+  );
+
   return c.json({ success: true, data: { ticket } }, 201);
 });
 
@@ -232,6 +270,26 @@ projects.post('/:id/tickets/:ticketId/messages', zValidator('json', addMessageSc
     author_id: user.id,
     content,
   });
+
+  background(
+    c,
+    (async () => {
+      const { project } = await assertProjectAccess(c.env.DB, c.req.param('id'), user.id, user.role);
+      const owner = project ? await getProjectOwner(c.env.DB, project.user_id) : null;
+      if (!project || !owner) return;
+      await notifyTicketMessage(c.env, {
+        authorIsStaff: isStaff(user.role) && user.id !== owner.id,
+        authorName: `${user.first_name ?? ''} ${user.last_name ?? ''}`.trim() || user.username,
+        message: content,
+        messageId: message.id,
+        ticketSubject: ticket.subject,
+        isNewTicket: false,
+        project: { id: project.id, name: project.name },
+        client: owner,
+        lang: 'fr',
+      });
+    })().catch((err) => console.error('ticket message email failed', err))
+  );
 
   return c.json({ success: true, data: { message } }, 201);
 });
@@ -328,6 +386,25 @@ projects.post('/:id/files', async (c) => {
     mime_type: file.type,
     r2_key: r2Key,
   });
+
+  // Un fichier depose par RaceUp est un livrable : le client doit le savoir. Un fichier
+  // depose par le client lui-meme n'a pas a lui etre notifie.
+  if (isStaff(user.role) && project.user_id !== user.id) {
+    background(
+      c,
+      (async () => {
+        const owner = await getProjectOwner(c.env.DB, project.user_id);
+        if (!owner) return;
+        await notifyProjectFileAdded(
+          c.env,
+          owner,
+          { id: project.id, name: project.name },
+          { id: record.id, filename: record.original_filename, size: record.file_size },
+          'fr'
+        );
+      })().catch((err) => console.error('project file email failed', err))
+    );
+  }
 
   return c.json({
     success: true,
