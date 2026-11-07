@@ -41,6 +41,10 @@
 
 ## Fait
 
+- [x] Avis clients : table + routes publiques/client/admin (migration 011). Le front appelait
+      `/api/reviews/*` depuis des mois alors qu'aucune route n'existait : le carrousel de
+      temoignages, l'onglet Avis de l'espace client et l'onglet admin tombaient tous en 404.
+
 - [x] Emails transactionnels Resend : domaine `race-up.net` verifie (DKIM/SPF/DMARC sur Cloudflare), 25 gabarits bilingues, journal de livraison + webhook Svix, page `/dashboard/emails` (migration 010)
 - [x] Verification d'email non bloquante (exigee pour payer uniquement), mot de passe oublie, `PATCH /api/auth/me`, `change-password`, `change-email` + confirmation
 - [x] Email au client quand une echeance est demandee

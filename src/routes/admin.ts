@@ -37,6 +37,8 @@ import { consentFiltersSchema } from '../validators/consent';
 import { adminPurchasesQuerySchema, validationHook } from '../validators/payments';
 import { listOrdersAdmin, toPublicOrder } from '../services/order';
 import { notifyProjectCompleted, notifyProjectCreated, notifySupportClosed } from '../services/notify';
+import { adminDeleteReview, getAllReviews, setReviewVisibility, getReviewById, toPublicReview } from '../services/review';
+import { reviewVisibilitySchema } from '../validators/reviews';
 import { background } from '../utils/background';
 
 const admin = new Hono<AppType>();
@@ -608,6 +610,37 @@ admin.post('/consents/:id/withdraw', async (c) => {
   }
   await withdrawConsent(c.env.DB, consent.consent_id, 'user_request');
   return c.json({ success: true });
+});
+
+// ==================== AVIS CLIENTS ====================
+
+// GET /reviews — tous les avis, ceux en attente de moderation d'abord
+admin.get('/reviews', async (c) => {
+  const list = await getAllReviews(c.env.DB);
+  return c.json({ success: true, data: { reviews: list.map(toPublicReview) } });
+});
+
+// PATCH /reviews/:id/visibility — publier ou retirer un avis du carrousel public
+admin.patch('/reviews/:id/visibility', zValidator('json', reviewVisibilitySchema), async (c) => {
+  const reviewId = c.req.param('id');
+  const { is_visible } = c.req.valid('json');
+
+  const changed = await setReviewVisibility(c.env.DB, reviewId, is_visible);
+  if (!changed) {
+    return c.json({ success: false, error: { code: 'NOT_FOUND', message: 'Avis introuvable.' } }, 404);
+  }
+
+  const review = await getReviewById(c.env.DB, reviewId);
+  return c.json({ success: true, data: { review: review ? toPublicReview(review) : null } });
+});
+
+// DELETE /reviews/:id — supprimer un avis (moderation : propos inacceptables, spam)
+admin.delete('/reviews/:id', async (c) => {
+  const deleted = await adminDeleteReview(c.env.DB, c.req.param('id'));
+  if (!deleted) {
+    return c.json({ success: false, error: { code: 'NOT_FOUND', message: 'Avis introuvable.' } }, 404);
+  }
+  return c.json({ success: true, data: { message: 'Avis supprime.' } });
 });
 
 export default admin;

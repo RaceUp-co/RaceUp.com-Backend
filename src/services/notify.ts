@@ -1,4 +1,4 @@
-import type { Bindings, Order, SupportTicket, User } from '../types';
+import type { Bindings, Order, ReviewWithContext, SupportTicket, User } from '../types';
 import { getEmailConfig, sendEmail } from './email';
 import { CATALOG, describeConfiguration, isServiceId, priceConfiguration } from '../data/catalog';
 import { formatEuros, formatFileSize } from '../utils/money';
@@ -671,5 +671,40 @@ export async function notifyTicketMessage(
     template: 'admin_project_ticket',
     replyTo: params.client.email,
     idempotencyKey: `ticket_message:${params.messageId}`,
+  });
+}
+
+// ---------- Avis clients ----------
+
+/**
+ * Nouvel avis a moderer. Un avis n'est jamais publie automatiquement : sans cet email,
+ * un temoignage pourrait attendre des semaines dans le dashboard sans que personne
+ * ne le sache.
+ */
+export async function notifyNewReview(
+  env: Bindings,
+  review: ReviewWithContext,
+  projectName: string
+): Promise<void> {
+  const config = getEmailConfig(env);
+  const email = projectEmails.adminNewReview({
+    projectName,
+    authorName: review.author_name,
+    authorCompany: review.author_company,
+    authorRole: review.author_role,
+    rating: review.rating,
+    comment: review.comment_fr,
+    link: review.link,
+    dashboardUrl: dashboardUrl(env, '/reviews'),
+    siteUrl: siteUrl(env),
+  });
+
+  await sendEmail(env, {
+    to: config.admin,
+    subject: email.subject,
+    html: email.html,
+    text: email.text,
+    template: 'admin_new_review',
+    idempotencyKey: `admin_new_review:${review.id}`,
   });
 }

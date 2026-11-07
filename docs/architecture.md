@@ -68,6 +68,7 @@ src/
 │   ├── consent.ts           Endpoints consent cookies (public) : POST /api/consent, status, policy, withdraw, my-consents
 │   ├── payments.ts          Paiements Stripe : config, checkout (acompte), statut, commandes, echeances, webhook
 │   ├── emails.ts            Webhook Resend : statuts de livraison (signature Svix verifiee en WebCrypto)
+│   ├── reviews.ts           Avis clients : carrousel public, depot/edition/suppression par le client
 │   └── tracking.ts          Endpoints tracking : page views (public)
 ├── emails/
 │   ├── layout.ts            Gabarit HTML des emails (tableaux + styles inline) + helpers version texte
@@ -128,7 +129,8 @@ src/
 │   ├── consent.ts           Logique metier consent : create, get, history, withdraw, list, stats, exportCsv (async gen)
 │   ├── email.ts             Envoi Resend (fetch, sans SDK) + journal email_deliveries + stats
 │   ├── email-token.ts       Jetons email a usage unique (verification, reset, changement d'adresse)
-│   └── notify.ts            Orchestration des notifications : destinataire, langue, cle d'idempotence
+│   ├── notify.ts            Orchestration des notifications : destinataire, langue, cle d'idempotence
+│   └── review.ts            CRUD avis + moderation (visibilite) + vue publique
 └── validators/
     ├── auth.ts              Schemas Zod pour auth
     ├── admin.ts             Schemas Zod pour admin
@@ -147,6 +149,7 @@ db/
     ├── 005-support-tickets.sql  Table: support_tickets + index (system ticketing public)
     ├── 006-security-events.sql  Table: security_events + index (audit logging)
     ├── 010-emails.sql           users.email_verified_at + tables email_tokens, email_deliveries
+    ├── 011-reviews.sql          Table reviews (avis clients moderes)
     ├── 007-cookie-consents.sql  Table: cookie_consents + index (registre RGPD des consentements)
     ├── 008-maintenance.sql      Table: maintenance_state (mono-ligne)
     └── 009-orders.sql           Tables: orders (paiements Stripe) + stripe_customers
@@ -273,6 +276,13 @@ Immutabilite : un changement = nouvelle ligne (meme consent_id). Retrait = UPDAT
 
 stripe_customers (user_id FK → users CASCADE, livemode, customer_id UNIQUE, created_at)
   PK (user_id, livemode) — un client Stripe par utilisateur et par mode (test/live)
+
+reviews (id PK, project_id FK → projects CASCADE, user_id FK → users CASCADE,
+         author_company, author_role, rating (1-5), comment_fr, comment_en, link,
+         is_visible, created_at, updated_at)
+  UNIQUE (project_id, user_id) — un seul avis par client et par projet.
+  is_visible = 0 par defaut : modere avant publication sur le site.
+  IDX: (is_visible, created_at), user_id, project_id
 
 email_tokens (id PK, user_id FK → users CASCADE, purpose, token_hash UNIQUE (SHA-256),
               new_email, expires_at, used_at, created_at)
@@ -415,6 +425,34 @@ Voir la section **Paiements Stripe** ci-dessous (flux, statuts, securite).
 | GET | /export?... | Export CSV streaming (ReadableStream, async generator) |
 | GET | /:id | Detail d'un consentement + historique des versions (meme consent_id) |
 | POST | /:id/withdraw | Retrait admin force (preuve CNIL) |
+
+### Avis clients (`/api/reviews`)
+
+| Methode | Route | Description | Auth |
+|---------|-------|-------------|------|
+| GET | /public | Avis moderes (carrousel du site, cache 5 min) | Non |
+| GET | /my | Avis du client, y compris en attente de moderation | Oui |
+| POST | / | Deposer un avis sur un projet termine dont on est proprietaire | Oui |
+| PUT | /:id | Modifier son avis (repasse en moderation) | Oui |
+| DELETE | /:id | Supprimer son avis | Oui |
+
+### Admin avis (`/api/admin/reviews`)
+
+| Methode | Route | Description |
+|---------|-------|-------------|
+| GET | / | Tous les avis, non moderes en premier |
+| PATCH | /:id/visibility | Publier ou retirer un avis |
+| DELETE | /:id | Supprimer un avis |
+
+**Moderation** : `is_visible = 0` a la creation. Un avis finit sur la page d'accueil : personne
+ne doit pouvoir y publier du texte sans relecture. Toute modification par le client remet
+`is_visible = 0`, sinon il suffirait de faire approuver un texte anodin puis de le remplacer.
+Un email de moderation part vers RaceUp a chaque nouvel avis.
+
+**Garde-fous** : projet `completed` et appartenant au client (revalide serveur, le front ne
+listant que les projets termines), un seul avis par couple (projet, client) via la contrainte
+`UNIQUE`, lien externe restreint a `http(s)://` (pas de `javascript:`), commentaire borne a
+1500 caracteres pour ne pas casser le carrousel.
 
 ### Emails (`/api/emails`)
 

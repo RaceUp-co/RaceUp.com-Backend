@@ -53,7 +53,8 @@ src/
 │   ├── consent.ts        Consentement cookies RGPD (post, status, policy, withdraw, my-consents)
 │   ├── maintenance.ts    Statut mode maintenance (GET public)
 │   ├── payments.ts       Paiements Stripe (config, checkout acompte, statut, commandes, échéances, webhook)
-│   └── emails.ts         Webhook Resend : statuts de livraison (signature Svix vérifiée en WebCrypto)
+│   ├── emails.ts         Webhook Resend : statuts de livraison (signature Svix vérifiée en WebCrypto)
+│   └── reviews.ts        Avis clients : public (carrousel), dépôt/édition/suppression par le client
 ├── emails/               Gabarits d'emails (HTML inline + version texte, bilingues fr/en)
 │   ├── layout.ts         renderEmail() + helpers (esc, table, button, callout, textBlock)
 │   ├── auth.ts           Bienvenue/vérification, mot de passe, alertes sécurité, inscription (interne)
@@ -109,13 +110,15 @@ src/
 │   ├── stripe.ts         getStripe (Workers), constructWebhookEvent, isPaymentsEnabled, getOrCreateStripeCustomer
 │   ├── email.ts          sendEmail (Resend) + journal email_deliveries + listEmailDeliveries/getEmailStats
 │   ├── email-token.ts    Jetons email à usage unique (SHA-256, verrou sur used_at) + markEmailVerified
-│   └── notify.ts         **Point d'entrée des emails** : les routes appellent notifyX(), jamais sendEmail
+│   ├── notify.ts         **Point d'entrée des emails** : les routes appellent notifyX(), jamais sendEmail
+│   └── review.ts         CRUD avis + modération (visibilité) + toPublicReview
 ├── validators/
 │   ├── auth.ts           Schemas Zod (register, login, OAuth)
 │   ├── admin.ts          Schemas Zod (projets, role update)
 │   ├── support.ts        Schemas Zod (support ticket creation, filters)
 │   ├── consent.ts        Schemas Zod (consent input, withdraw, status query)
-│   └── payments.ts       Schemas Zod paiements + validationHook (erreurs au format standard)
+│   ├── payments.ts       Schemas Zod paiements + validationHook (erreurs au format standard)
+│   └── reviews.ts        Schemas Zod avis (création, édition, visibilité ; lien http(s) uniquement)
 ├── utils/
 │   ├── hash.ts           hashIP (SHA-256 + sel CONSENT_SALT, RGPD) + getClientIP (headers CF)
 │   ├── origins.ts        Origines du site : isCorsAllowedOrigin (CORS) + resolveSiteOrigin (retour Stripe)
@@ -130,7 +133,8 @@ db/
     ├── 007-cookie-consents.sql  Table cookie_consents (preuve RGPD) + index
     ├── 008-maintenance.sql      Table maintenance_state (mono-ligne, mode maintenance)
     ├── 009-orders.sql           Tables orders (paiements Stripe) + stripe_customers
-    └── 010-emails.sql           users.email_verified_at + tables email_tokens, email_deliveries
+    ├── 010-emails.sql           users.email_verified_at + tables email_tokens, email_deliveries
+    └── 011-reviews.sql           Table reviews (avis clients, modérés avant publication)
 docs/
 ├── architecture.md       Documentation complete (source de verite)
 └── TODO.md               Roadmap
@@ -221,6 +225,26 @@ R2 key: `projects/{projectId}/{uuid}.ext`
 
 Erreurs : `PAYMENTS_UNAVAILABLE`(503), `INVALID_CONFIGURATION`(400), `TERMS_NOT_ACCEPTED`(400), `PRICE_MISMATCH`(409), `INVALID_STATE`/`ALREADY_PAID`(409), `PAYMENT_PROVIDER_ERROR`(502), `INVALID_SIGNATURE`(400).
 Prix TOUJOURS recalculés serveur (`data/catalog.ts`). Confirmation idempotente (webhook + page de confirmation). Détail : `docs/architecture.md` § Paiements Stripe.
+
+### Avis `/api/reviews`
+
+| Method | Route | Auth | Description |
+|--------|-------|------|-------------|
+| GET | /public | - | Avis modérés pour le carrousel du site (cache 5 min) |
+| GET | /my | JWT | Avis du client (y compris ceux en attente de modération) |
+| POST | / | JWT | Déposer un avis sur un projet **terminé** dont on est propriétaire |
+| PUT | /:id | JWT | Modifier son avis — **repasse en modération** |
+| DELETE | /:id | JWT | Supprimer son avis |
+
+Erreurs : `PROJECT_NOT_COMPLETED`(409), `REVIEW_ALREADY_EXISTS`(409), `NOT_FOUND`(404).
+
+### Admin Avis `/api/admin/reviews` (JWT + admin)
+
+| Method | Route | Description |
+|--------|-------|-------------|
+| GET | / | Tous les avis, ceux en attente de modération d'abord |
+| PATCH | /:id/visibility | Publier / retirer du carrousel (`{is_visible: boolean}`) |
+| DELETE | /:id | Supprimer un avis (spam, propos inacceptables) |
 
 ### Support `/api/support` (public)
 
@@ -369,6 +393,12 @@ orders (id PK, user_id? FK→users SET NULL, customer_email, customer_name?, pro
 
 stripe_customers (user_id FK→users CASCADE, livemode[0|1], customer_id UNIQUE, created_at)  PK(user_id, livemode)
 
+reviews (id PK, project_id FK→projects CASCADE, user_id FK→users CASCADE, author_company,
+         author_role, rating[1-5], comment_fr, comment_en?, link?, is_visible[0|1],
+         created_at, updated_at)  UNIQUE(project_id, user_id)
+  is_visible = 0 par défaut : MODÉRÉ avant d'apparaître sur le site public.
+  IDX: (is_visible, created_at), user_id, project_id
+
 email_tokens (id PK, user_id FK→users CASCADE, purpose['email_verification'|'password_reset'|
               'email_change'], token_hash UNIQUE (SHA-256), new_email?, expires_at, used_at?, created_at)
   Usage unique, jamais en clair. TTL : vérif 48h, reset 1h, changement d'email 24h.
@@ -411,6 +441,8 @@ Codes: UNAUTHORIZED(401), FORBIDDEN(403), NOT_FOUND(404), EMAIL_ALREADY_EXISTS(4
 **Dashboard anti-XSS**: `DataTable` échappe toute chaîne ; HTML dans une cellule UNIQUEMENT via `html\`...\`` (hono/html, auto-échappement). Jamais de HTML par concaténation (noms de projets, erreurs journalisées, consent_id = données tierces). Login dashboard : `?error=` = codes connus seulement.
 
 **Paiements**: acompte = commande `pending` avec `project_id` réservé → au paiement, batch D1 (`UPDATE orders` conditionnel + `INSERT OR IGNORE INTO projects`) : jamais de projet en double. Échéance = commande `awaiting_payment` créée par un admin, payable depuis l'espace projet. Statuts et flux : `docs/architecture.md` § Paiements Stripe.
+
+**Avis**: `is_visible = 0` par défaut — un avis n'apparaît sur le site qu'après modération depuis le dashboard, et **toute modification par le client le repasse en attente** (sinon on fait approuver un texte neutre puis on le remplace). Le dépôt exige un projet `completed` dont le client est propriétaire, un seul avis par projet (contrainte UNIQUE). `author_name` est calculé en SQL (prénom + initiale) : un témoignage public n'expose pas le nom complet. Un nouvel avis déclenche un email de modération vers RaceUp.
 
 **Emails**: les routes appellent `services/notify.ts` (`notifyOrderPaid`, `notifySupportTicket`...), **jamais `sendEmail` directement** — c'est là que vivent le choix du destinataire, la langue et la clé d'idempotence. Envoi **après** la réponse HTTP via `background(c, ...)`. Un email ne doit JAMAIS faire échouer une action métier : tout est capturé, rien n'est propagé. Les emails de paiement sont conditionnés à la réussite de la transition en base (`changes > 0`) **et** portent une clé d'idempotence Resend : le webhook Stripe et la page de confirmation synchronisent la même commande en parallèle, et Stripe rejoue ses événements 3 jours. Les notifications internes portent un `reply_to` sur l'adresse du client. Vérification d'email **non bloquante** sauf pour payer (`403 EMAIL_NOT_VERIFIED`). Détail : `docs/architecture.md` § Emails transactionnels.
 

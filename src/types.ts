@@ -184,6 +184,29 @@ export type Order = {
   refunded_at: string | null;
 };
 
+// ---------- Avis clients ----------
+
+export type Review = {
+  id: string;
+  project_id: string;
+  user_id: string;
+  author_company: string;
+  author_role: string;
+  rating: number;
+  comment_fr: string;
+  comment_en: string | null;
+  link: string | null;
+  is_visible: number; // 0 = en attente de moderation (stocke en INTEGER SQLite)
+  created_at: string;
+  updated_at: string;
+};
+
+// Avis enrichi des donnees affichees par le front, qui vivent dans d'autres tables.
+export type ReviewWithContext = Review & {
+  author_name: string; // prenom + initiale (users)
+  project_name: string; // nom du projet (projects)
+};
+
 // ---------- Maintenance ----------
 
 export type MaintenanceState = {

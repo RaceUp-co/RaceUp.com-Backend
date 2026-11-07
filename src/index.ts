@@ -8,6 +8,7 @@ import trackingRoutes from './routes/tracking';
 import consentRoutes from './routes/consent';
 import supportRoutes from './routes/support';
 import emailRoutes from './routes/emails';
+import reviewRoutes from './routes/reviews';
 import maintenanceRoutes from './routes/maintenance';
 import paymentRoutes from './routes/payments';
 import { loggerMiddleware } from './middleware/logger';
@@ -66,6 +67,7 @@ app.route('/api/track', trackingRoutes);
 app.route('/api/consent', consentRoutes);
 app.route('/api/support', supportRoutes);
 app.route('/api/emails', emailRoutes);
+app.route('/api/reviews', reviewRoutes);
 app.route('/api/maintenance', maintenanceRoutes);
 app.route('/api/payments', paymentRoutes);
 

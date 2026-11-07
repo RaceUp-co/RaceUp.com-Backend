@@ -248,3 +248,55 @@ export function adminProjectTicketActivity(p: {
     text: textBlock([headline, '', textRows(rows), '', p.message, '', `Dashboard : ${p.dashboardUrl}`]),
   };
 }
+
+// ---------- RaceUp : nouvel avis client a moderer ----------
+
+export function adminNewReview(p: {
+  projectName: string;
+  authorName: string;
+  authorCompany: string;
+  authorRole: string;
+  rating: number;
+  comment: string;
+  link: string | null;
+  dashboardUrl: string;
+  siteUrl: string;
+}): Email {
+  const stars = `${'\u2605'.repeat(p.rating)}${'\u2606'.repeat(5 - p.rating)}`;
+
+  const rows: Row[] = [
+    { label: 'Note', value: `${stars} (${p.rating}/5)`, strong: true },
+    { label: 'Projet', value: p.projectName },
+    { label: 'Auteur', value: `${p.authorName} — ${p.authorRole}, ${p.authorCompany}` },
+    { label: 'Lien', value: p.link ?? '' },
+    { label: 'Date', value: new Date().toLocaleString('fr-FR') },
+  ];
+
+  return {
+    subject: `Nouvel avis ${p.rating}/5 — ${p.projectName}`,
+    html: renderEmail({
+      lang: 'fr',
+      title: 'Nouvel avis client',
+      preheader: `${p.authorName} (${p.authorCompany}) : ${p.comment.slice(0, 110)}`,
+      siteUrl: p.siteUrl,
+      body: [
+        paragraph(
+          'Un client vient de deposer un avis. Il n\u2019est <strong>pas encore publie</strong> : rendez-le visible depuis l\u2019onglet Avis du dashboard pour qu\u2019il apparaisse dans le carrousel du site.'
+        ),
+        table(rows),
+        callout(esc(p.comment).replace(/\n/g, '<br>')),
+        button('Moderer cet avis', p.dashboardUrl),
+      ].join('\n'),
+    }),
+    text: textBlock([
+      `Nouvel avis ${p.rating}/5`,
+      '',
+      textRows(rows),
+      '',
+      p.comment,
+      '',
+      "L'avis n'est pas encore publie.",
+      `Dashboard : ${p.dashboardUrl}`,
+    ]),
+  };
+}
