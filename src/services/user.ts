@@ -1,6 +1,7 @@
 import type { User, RefreshToken } from '../types';
 
-const USER_COLUMNS = 'id, email, password_hash, username, first_name, last_name, birth_date, auth_provider, role, created_at, updated_at';
+const USER_COLUMNS =
+  'id, email, password_hash, username, first_name, last_name, birth_date, auth_provider, role, email_verified_at, created_at, updated_at';
 
 export async function createUser(
   db: D1Database,
@@ -31,6 +32,7 @@ export async function createUser(
     birth_date: birthDate ?? null,
     auth_provider: 'email',
     role: 'user',
+    email_verified_at: null,
     created_at: now,
     updated_at: now,
   };
@@ -48,11 +50,13 @@ export async function createOAuthUser(
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
 
+  // Google et Apple ne delivrent un jeton que pour une adresse qu'ils ont eux-memes
+  // verifiee : inutile de redemander une confirmation au client.
   await db
     .prepare(
-      'INSERT INTO users (id, email, password_hash, username, first_name, last_name, auth_provider, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      'INSERT INTO users (id, email, password_hash, username, first_name, last_name, auth_provider, email_verified_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
     )
-    .bind(id, email, '', username, firstName, lastName, authProvider, now, now)
+    .bind(id, email, '', username, firstName, lastName, authProvider, now, now, now)
     .run();
 
   return {
@@ -65,6 +69,7 @@ export async function createOAuthUser(
     birth_date: null,
     auth_provider: authProvider,
     role: 'user',
+    email_verified_at: now,
     created_at: now,
     updated_at: now,
   };
@@ -200,5 +205,62 @@ export async function cleanExpiredTokens(
       "DELETE FROM refresh_tokens WHERE user_id = ? AND expires_at <= datetime('now')"
     )
     .bind(userId)
+    .run();
+}
+
+// ---------- Mise a jour du profil (PATCH /api/auth/me) ----------
+
+export type ProfileUpdate = {
+  first_name?: string;
+  last_name?: string;
+  username?: string;
+  birth_date?: string | null;
+};
+
+/**
+ * Met a jour les champs fournis uniquement (UPDATE partiel) : une requete qui ne
+ * contient que `first_name` ne doit pas effacer la date de naissance.
+ */
+export async function updateUserProfile(
+  db: D1Database,
+  userId: string,
+  data: ProfileUpdate
+): Promise<void> {
+  const sets: string[] = [];
+  const params: unknown[] = [];
+
+  if (data.first_name !== undefined) {
+    sets.push('first_name = ?');
+    params.push(data.first_name);
+  }
+  if (data.last_name !== undefined) {
+    sets.push('last_name = ?');
+    params.push(data.last_name);
+  }
+  if (data.username !== undefined) {
+    sets.push('username = ?');
+    params.push(data.username);
+  }
+  if (data.birth_date !== undefined) {
+    sets.push('birth_date = ?');
+    params.push(data.birth_date);
+  }
+  if (sets.length === 0) return;
+
+  sets.push('updated_at = ?');
+  params.push(new Date().toISOString(), userId);
+
+  await db.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`).bind(...params).run();
+}
+
+export async function updateUserPassword(
+  db: D1Database,
+  userId: string,
+  passwordHash: string
+): Promise<void> {
+  const now = new Date().toISOString();
+  await db
+    .prepare('UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?')
+    .bind(passwordHash, now, userId)
     .run();
 }

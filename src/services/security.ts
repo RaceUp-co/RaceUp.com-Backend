@@ -6,6 +6,7 @@ export type SecurityEventType =
   | 'role_changed'
   | 'password_changed'
   | 'email_changed'
+  | 'email_verified'
   | 'admin_user_deleted';
 
 // ---------- Verrou anti brute-force (connexion API + dashboard) ----------
