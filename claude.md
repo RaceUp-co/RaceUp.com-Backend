@@ -125,7 +125,9 @@ src/
 │   ├── money.ts          formatEuros / formatFileSize (partagé paiements + emails)
 │   └── background.ts     background(c, task) : envoi après la réponse HTTP (executionCtx.waitUntil)
 scripts/
-└── stripe-setup.mjs      npm run stripe:setup : webhook Stripe + secrets wrangler (saisie masquée)
+├── stripe-setup.mjs      npm run stripe:setup : webhook Stripe + secrets wrangler (saisie masquée)
+└── preview-emails.ts     npm run emails:preview -- adresse@x.fr : envoie un aperçu de CHAQUE gabarit
+                       (importe les vrais gabarits de src/emails/, données fictives, objets préfixés [APERCU])
 db/
 ├── schema.sql            Tables initiales
 └── migrations/           Evolutions schema (appliquees via wrangler d1 execute)
@@ -474,4 +476,5 @@ npx wrangler secret put JWT_SECRET    # secret signature JWT
 npx wrangler secret put CONSENT_SALT  # secret hash IP (RGPD)
 npx wrangler secret put RESEND_API_KEY        # emails transactionnels (sinon désactivés)
 npx wrangler secret put RESEND_WEBHOOK_SECRET # statuts de livraison Resend (Svix)
+npm run emails:preview -- toi@exemple.com     # relecture visuelle des 27 gabarits
 ```

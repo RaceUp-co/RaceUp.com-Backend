@@ -767,6 +767,15 @@ Le webhook est signe au format **Svix** (HMAC-SHA256 de `<id>.<timestamp>.<corps
 verifie a la main en WebCrypto (le SDK Svix n'est pas compatible Workers), avec tolerance de
 5 minutes contre les rejeux et comparaison a temps constant.
 
+### Relecture visuelle des gabarits
+
+`npm run emails:preview -- adresse@exemple.fr` envoie un apercu de CHAQUE gabarit a l'adresse
+donnee. Le script (`scripts/preview-emails.ts`) importe les gabarits reels depuis `src/emails/` :
+ce sont exactement ceux que recoivent les clients, pas des copies — si un gabarit change, l'apercu
+change avec lui. Donnees fictives, objets prefixes `[APERCU nn]` pour qu'aucun apercu ne puisse
+etre pris pour un vrai email transactionnel. Un exemplaire est envoye en anglais pour verifier la
+version bilingue.
+
 ### Inbox Resend
 
 `support@race-up.net` est une **inbox Resend** : les reponses des clients y arrivent en fils de
